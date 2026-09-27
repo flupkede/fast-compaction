@@ -1,3 +1,4 @@
+import { redactText, redactValue } from './redact.js';
 import type {
   CompactionState,
   FittedState,
@@ -78,7 +79,7 @@ export function collectToolCalls(
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
         tool: tool.tool,
-        input: tool.input,
+        input: redactValue(tool.input),
         callIndex,
         resultIndex: found.index,
         resultChars: found.result.text.length,
@@ -163,7 +164,7 @@ function historyEntries(
       result: resultNote(call),
     }));
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
-    const entry: HistoryEntry = { i, role: message.role, text: message.text };
+    const entry: HistoryEntry = { i, role: message.role, text: redactText(message.text) };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;
     entries.push(entry);
   });
@@ -180,7 +181,7 @@ export function goalFromMessages(messages: readonly Message[]): string {
         (message.toolResults ?? []).length === 0,
     )
     .slice(-3)
-    .map((message) => truncate(message.text, 500))
+    .map((message) => truncate(redactText(message.text), 500))
     .join('\n');
 }
 

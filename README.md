@@ -18,6 +18,18 @@ The repository is both an npm package (`src/`) and a Claude Code plugin
 (`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
 built-in compaction summary with the original messages.
 
+## Secret redaction (fork of tamaratran/fast-jev-compaction)
+
+Only the state sent to Jev (`src/state.ts`) is affected — the transcript
+`compact()` returns to the caller is untouched, so nothing kept locally is
+ever redacted. Before message text or tool input is serialised into that
+state, `src/redact.ts` replaces secret-shaped substrings (API keys, tokens,
+passwords, private key blocks, `name=value`/`name: value` credential
+assignments) with a `[REDACTED:label]` marker. Tool results were never sent
+in the first place (only a `chars` count, see `resultNote` in `state.ts`).
+This is pattern-based, not a guarantee: it catches recognisable secret
+shapes, not arbitrary confidential text.
+
 ## How it works
 
 1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
