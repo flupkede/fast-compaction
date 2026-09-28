@@ -233,7 +233,7 @@ export function summarize(result: CompactResult): string {
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
-  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s), ${stats.ms} ms`;
 }
 
 const UI_LOG_MAX_CHARS = 4096;
