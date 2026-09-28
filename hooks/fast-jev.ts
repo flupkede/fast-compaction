@@ -23,7 +23,12 @@ const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
   model: DEFAULT_MODEL,
+  jevTimeoutMs: 8_000,
 };
+
+/** How long after a turn the deferred compaction waits, and how often it retries. */
+const DEFER_MS = 1_000;
+const DEFER_ATTEMPTS = 5;
 
 export type HookFetchInit = {
   method?: string;
@@ -45,6 +50,7 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  jevTimeoutMs: number;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -79,6 +85,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.minReductionRatio,
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
+    jevTimeoutMs: optionNumber(options, 'jevTimeoutMs', HOOK_DEFAULTS.jevTimeoutMs),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -172,6 +179,46 @@ export async function compactSession(
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
+/**
+ * Rejects when `work` outlasts `ms`. `$.http.fetch` takes no signal, so the
+ * requests keep running; the hook just stops waiting and falls back before
+ * the engine's hook budget expires.
+ */
+export function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<T> {
+  const deadline = sleep(ms).then((): never => {
+    throw new Error(`Jev did not answer within ${ms} ms`);
+  });
+  deadline.catch(() => {});
+  return Promise.race([work, deadline]);
+}
+
+/**
+ * Compacts once the turn has ended. `$.session.compact()` rejects while a turn
+ * runs, and a `turn.complete` hook is still part of its turn, so it is never
+ * awaited there; it retries a few times in case the next turn already started.
+ */
+export async function deferredCompact(
+  compactFn: () => Promise<unknown>,
+  sleep: (ms: number) => Promise<void>,
+  log: (text: string) => void,
+): Promise<void> {
+  let last: unknown;
+  for (let attempt = 0; attempt < DEFER_ATTEMPTS; attempt++) {
+    await sleep(DEFER_MS);
+    try {
+      await compactFn();
+      return;
+    } catch (error) {
+      last = error;
+    }
+  }
+  log(`auto-compact skipped (${last instanceof Error ? last.message : String(last)})`);
+}
+
 function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
@@ -263,10 +310,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
-        const response = await $.http.fetch(url, init);
-        return { status: response.status, ok: response.ok, text: response.text };
-      });
+      const { result, messages } = await withDeadline(
+        compactSession(event.messages, config, async (url, init) => {
+          const response = await $.http.fetch(url, init);
+          return { status: response.status, ok: response.ok, text: response.text };
+        }),
+        config.jevTimeoutMs,
+        (ms) => $.clock.sleep(ms, { signal: next.signal }),
+      );
       for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         notify(
@@ -290,20 +341,24 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
-    if (compacting) return next(event);
+    const answer = await next(event);
+    if (compacting) return answer;
     try {
       const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
-      compacting = true;
-      await $.session.compact();
+      if ((context.percent ?? 0) < configured.compactAtPercent) return answer;
     } catch (error) {
-      $.ui.log(
-        `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
-      );
-    } finally {
-      compacting = false;
+      $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
+      return answer;
     }
-    return next(event);
+    compacting = true;
+    void deferredCompact(
+      () => $.session.compact(),
+      (ms) => $.clock.sleep(ms),
+      (text) => $.ui.log(text),
+    ).finally(() => {
+      compacting = false;
+    });
+    return answer;
   });
 };
 

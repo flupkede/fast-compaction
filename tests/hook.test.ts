@@ -3,9 +3,11 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  deferredCompact,
   resolveHookConfig,
   summarize,
   toSessionMessages,
+  withDeadline,
 } from '../hooks/fast-jev.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
 
@@ -53,7 +55,12 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      model: 'jev-latest',
+      jevTimeoutMs: 8000,
+    });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
     ).toEqual({
@@ -64,7 +71,47 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      jevTimeoutMs: 8000,
     });
+  });
+});
+
+describe('withDeadline', () => {
+  it('passes the work through when it settles first', async () => {
+    await expect(withDeadline(Promise.resolve(1), 10, () => new Promise(() => {}))).resolves.toBe(1);
+  });
+
+  it('rejects when the deadline passes first', async () => {
+    await expect(withDeadline(new Promise(() => {}), 10, async () => {})).rejects.toThrow(/within 10 ms/);
+  });
+});
+
+describe('deferredCompact', () => {
+  it('retries while a turn still runs, then compacts', async () => {
+    let calls = 0;
+    const logs: string[] = [];
+    await deferredCompact(
+      async () => {
+        calls += 1;
+        if (calls < 3) throw new Error('turn running');
+      },
+      async () => {},
+      (text) => logs.push(text),
+    );
+    expect(calls).toBe(3);
+    expect(logs).toEqual([]);
+  });
+
+  it('gives up after its attempts and logs why', async () => {
+    const logs: string[] = [];
+    await deferredCompact(
+      async () => {
+        throw new Error('turn running');
+      },
+      async () => {},
+      (text) => logs.push(text),
+    );
+    expect(logs).toEqual(['auto-compact skipped (turn running)']);
   });
 });
 
