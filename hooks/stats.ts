@@ -46,6 +46,25 @@ export type SessionStats = {
 export const STORE_PREFIX = 'session:';
 export const RECENT_PER_SESSION = 20;
 export const MAX_SESSIONS = 200;
+export const REASON_MAX_CHARS = 200;
+/** Anthropic prompt-cache pricing relative to a base input token. */
+export const CACHE_READ_PRICE = 0.1;
+export const CACHE_WRITE_PRICE = 1.25;
+
+/** Input-token equivalents at cache pricing: what the input side actually costs. */
+export function weightedInput(u: UsageTotals): number {
+  return u.input + u.cacheRead * CACHE_READ_PRICE + u.cacheWrite * CACHE_WRITE_PRICE;
+}
+
+/**
+ * Saved tokens priced as they would have been sent: at the main loop's cache-read
+ * share they were cheap cache reads, the rest full-price input.
+ */
+export function weightedSaved(saved: number, main: UsageTotals): number {
+  const sent = main.input + main.cacheRead + main.cacheWrite;
+  const readShare = sent > 0 ? main.cacheRead / sent : 0;
+  return saved * (readShare * CACHE_READ_PRICE + (1 - readShare));
+}
 
 function emptyUsage(): UsageTotals {
   return { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
@@ -83,7 +102,7 @@ export function reviveSession(id: string, value: unknown, now: number): SessionS
     recent: Array.isArray(stored.recent)
       ? stored.recent.filter(
           (r): r is CompactionRecord =>
-            !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && r.outcome in base.compactions,
+            !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && Object.hasOwn(base.compactions, r.outcome),
         )
       : [],
   };
@@ -135,7 +154,9 @@ export function recordCompaction(stats: SessionStats, record: CompactionRecord):
     stats.droppedTokens += dropped;
     stats.activeDrop = dropped;
   }
-  stats.recent = [...stats.recent, record].slice(-RECENT_PER_SESSION);
+  const reason =
+    record.reason === undefined ? undefined : record.reason.replace(/\s+/g, ' ').trim().slice(0, REASON_MAX_CHARS);
+  stats.recent = [...stats.recent, { ...record, reason }].slice(-RECENT_PER_SESSION);
   return stats;
 }
 
@@ -218,7 +239,10 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
       c.jev > 0 ? ` · jev avg ${avgMs} ms` : ''
     }`,
     `Dropped      ${formatTokens(stats.droppedTokens)} tokens removed by Jev`,
-    `Saved        ~${formatTokens(stats.savedTokens)} context tokens not re-sent (estimate; mostly cache reads)`,
+    `Saved        ~${formatTokens(stats.savedTokens)} context tokens not re-sent · ~${formatTokens(
+      weightedSaved(stats.savedTokens, stats.main),
+    )} input-equivalent at cache pricing (estimate)`,
+    `Weighted     ${formatTokens(weightedInput(u))} input-equivalent sent (cache read ${CACHE_READ_PRICE}x, write ${CACHE_WRITE_PRICE}x)`,
     `Turns        ${stats.main.turns} main · ${stats.agents.turns} subagent · avg ${avgContext} input per turn`,
     `Tokens       input ${formatTokens(u.input)} · cache read ${formatTokens(u.cacheRead)} · cache write ${formatTokens(
       u.cacheWrite,

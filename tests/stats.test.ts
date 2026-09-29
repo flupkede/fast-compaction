@@ -11,7 +11,10 @@ import {
   recordTurn,
   reviveSession,
   RECENT_PER_SESSION,
+  REASON_MAX_CHARS,
   STORE_PREFIX,
+  weightedInput,
+  weightedSaved,
   type TokenUsage,
 } from '../hooks/stats.ts';
 
@@ -106,5 +109,32 @@ describe('stats', () => {
     expect(formatTokens(950)).toBe('950');
     expect(formatTokens(167_400)).toBe('167K');
     expect(formatTokens(4_830_000)).toBe('4.8M');
+  });
+
+  it('weights input by cache price', () => {
+    const u = { turns: 1, input: 1_000, cacheRead: 10_000, cacheWrite: 800, output: 0 };
+    expect(weightedInput(u)).toBe(1_000 + 1_000 + 1_000);
+  });
+
+  it('prices saved tokens at the main loop cache-read share', () => {
+    const main = { turns: 1, input: 0, cacheRead: 900, cacheWrite: 100, output: 0 };
+    expect(weightedSaved(1_000, main)).toBeCloseTo(1_000 * (0.9 * 0.1 + 0.1));
+    expect(weightedSaved(1_000, { ...main, cacheRead: 0, cacheWrite: 0 })).toBe(1_000);
+  });
+
+  it('stores a fallback reason on one line and capped', () => {
+    const s = recordCompaction(emptySession('s', 0), {
+      at: 1,
+      outcome: 'fallback-error',
+      reason: `boom\n\n  ${'x'.repeat(5_000)}`,
+    });
+    const reason = s.recent[0]?.reason ?? '';
+    expect(reason.startsWith('boom x')).toBe(true);
+    expect(reason.length).toBe(REASON_MAX_CHARS);
+  });
+
+  it('rejects prototype-key outcomes when reviving', () => {
+    const s = reviveSession('s', { recent: [{ at: 1, outcome: 'toString' }] }, 0);
+    expect(s.recent).toEqual([]);
   });
 });

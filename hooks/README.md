@@ -90,7 +90,7 @@ reduction, duration).
 reduction. `Saved` credits that drop once per later main-loop API call until
 the next compaction, calls per turn estimated as the turn's summed input over
 the last response's input. It is an estimate against keeping the pre-compaction
-context, and most of those tokens would have been cache reads.
+context. The input-equivalent figure prices it at the main loop's cache-read share (reads 0.1x, the rest full price); `Weighted` prices everything sent the same way (writes 1.25x).
 
 ## Scope and caveat
 
