@@ -23,6 +23,8 @@ export type CompactionRecord = {
   ratio?: number;
   ms?: number;
   reason?: string;
+  /** A subagent's own transcript: counted, but it never moves the main loop's credited drop. */
+  agent?: boolean;
 };
 
 export type SessionStats = {
@@ -78,7 +80,12 @@ export function reviveSession(id: string, value: unknown, now: number): SessionS
     main: { ...base.main, ...stored.main },
     agents: { ...base.agents, ...stored.agents },
     compactions: { ...base.compactions, ...stored.compactions },
-    recent: Array.isArray(stored.recent) ? stored.recent : [],
+    recent: Array.isArray(stored.recent)
+      ? stored.recent.filter(
+          (r): r is CompactionRecord =>
+            !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && r.outcome in base.compactions,
+        )
+      : [],
   };
 }
 
@@ -122,12 +129,11 @@ export function recordTurn(stats: SessionStats, turn: TurnSample): SessionStats 
 export function recordCompaction(stats: SessionStats, record: CompactionRecord): SessionStats {
   stats.lastAt = record.at;
   stats.compactions[record.outcome] += 1;
-  if (record.outcome === 'jev') {
-    stats.jevMs += record.ms ?? 0;
-    stats.droppedTokens += record.tokensDropped ?? 0;
-    stats.activeDrop = record.tokensDropped ?? 0;
-  } else {
-    stats.activeDrop = 0;
+  if (record.outcome === 'jev') stats.jevMs += record.ms ?? 0;
+  if (!record.agent) {
+    const dropped = record.outcome === 'jev' ? (record.tokensDropped ?? 0) : 0;
+    stats.droppedTokens += dropped;
+    stats.activeDrop = dropped;
   }
   stats.recent = [...stats.recent, record].slice(-RECENT_PER_SESSION);
   return stats;

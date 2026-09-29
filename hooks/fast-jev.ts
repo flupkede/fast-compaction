@@ -18,6 +18,21 @@ import type {
   ToolResult,
   ToolUse,
 } from '../src/types.js';
+import {
+  aggregate,
+  droppedTokens,
+  evictable,
+  formatReport,
+  recordCompaction,
+  recordTurn,
+  reviveSession,
+  STORE_PREFIX,
+  type CompactionRecord,
+  type SessionStats,
+  type TurnSample,
+} from './stats.js';
+
+export const STATS_COMMAND = 'jev-stats';
 
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
@@ -271,6 +286,64 @@ export function decisionLogLines(
   );
 }
 
+/** The slice of `$.store` the stats need, so they can be driven without an engine. */
+export type StatsStore = {
+  get: (key: string) => Promise<unknown>;
+  set: (key: string, value: unknown) => Promise<void>;
+  delete: (key: string) => Promise<void>;
+  keys: () => Promise<string[]>;
+};
+
+/** Host-shaped holder: the plugin validator requires `$.store.*` spelled at each call site. */
+export type StatsHostStore = { store: StatsStore };
+
+export async function loadAllStats($: StatsHostStore, now: number): Promise<SessionStats[]> {
+  const keys = (await $.store.keys()).filter((key) => key.startsWith(STORE_PREFIX));
+  return Promise.all(
+    keys.map(async (key) => reviveSession(key.slice(STORE_PREFIX.length), await $.store.get(key), now)),
+  );
+}
+
+/** One key per session: concurrent sessions each write only their own. */
+export async function updateSessionStats(
+  $: StatsHostStore,
+  id: string,
+  now: number,
+  update: (stats: SessionStats) => void,
+): Promise<void> {
+  const key = STORE_PREFIX + id;
+  const stats = reviveSession(id, await $.store.get(key), now);
+  update(stats);
+  await $.store.set(key, stats);
+}
+
+export async function evictOldStats($: StatsHostStore, now: number): Promise<number> {
+  const stale = evictable(await loadAllStats($, now));
+  for (const key of stale) await $.store.delete(key);
+  return stale.length;
+}
+
+/** `/jev-stats` (all sessions), `/jev-stats session` (this one), `/jev-stats reset`. */
+export async function statsCommand(
+  $: StatsHostStore,
+  args: string,
+  sessionId: string,
+  now: number,
+): Promise<string> {
+  const arg = args.trim().toLowerCase();
+  const all = await loadAllStats($, now);
+  if (arg === 'reset') {
+    for (const s of all) await $.store.delete(STORE_PREFIX + s.id);
+    return `fast-jev-compaction stats reset (${all.length} session(s) cleared).`;
+  }
+  if (arg === 'session') {
+    const own = all.filter((s) => s.id === sessionId);
+    return formatReport(aggregate(own), 'this session', own.length);
+  }
+  if (arg !== '') return `Unknown argument "${args.trim()}". Use /${STATS_COMMAND} [session|reset].`;
+  return formatReport(aggregate(all), 'all sessions', all.length);
+}
+
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
@@ -303,11 +376,66 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+type StatsHost = {
+  store: StatsStore;
+  session: { id: () => Promise<string> };
+  clock: { now: () => Promise<number> };
+  ui: { log: (text: string) => void };
+};
+
+// Serialises this process's read-modify-write of its session key.
+let statsChain: Promise<void> = Promise.resolve();
+
+function withStats($: StatsHost, update: (stats: SessionStats, now: number) => void): void {
+  statsChain = statsChain
+    .then(async () => {
+      const [id, now] = await Promise.all([$.session.id(), $.clock.now()]);
+      await updateSessionStats($, id, now, (stats) => update(stats, now));
+    })
+    .catch((error: unknown) => {
+      $.ui.log(`stats not recorded (${error instanceof Error ? error.message : String(error)})`);
+    });
+}
+
+function logCompaction($: StatsHost, record: Omit<CompactionRecord, 'at'>): void {
+  withStats($, (stats, at) => void recordCompaction(stats, { ...record, at }));
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
 
+  on('session.start', async ($, event, next) => {
+    try {
+      await $.command.register({
+        name: STATS_COMMAND,
+        description: 'fast-jev-compaction token and savings stats',
+        argumentHint: '[session|reset]',
+        immediate: true,
+      });
+      await evictOldStats($, await $.clock.now());
+    } catch (error) {
+      $.ui.log(`stats setup failed (${error instanceof Error ? error.message : String(error)})`);
+    }
+    return next(event);
+  });
+
+  on('command.run', { command: STATS_COMMAND }, async ($, event) => {
+    await statsChain;
+    const [id, now] = await Promise.all([$.session.id(), $.clock.now()]);
+    return { text: await statsCommand($, event.args, id, now) };
+  });
+
   on('session.compact', async ($, event, next) => {
+    const agent = event.agentId !== undefined;
+    let tokensBefore: number | undefined;
+    if (!agent) {
+      try {
+        tokensBefore = (await $.session.usage()).context.tokens;
+      } catch {
+        tokensBefore = undefined;
+      }
+    }
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await withDeadline(
@@ -319,37 +447,56 @@ export const register: Register = (on: On, options: PluginOptions) => {
         (ms) => $.clock.sleep(ms, { signal: next.signal }),
       );
       for (const line of decisionLogLines(result)) $.ui.log(line);
-      if (reductionRatio(result) < config.minReductionRatio) {
+      const ratio = reductionRatio(result);
+      if (ratio < config.minReductionRatio) {
         notify(
           $,
           `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
         );
+        logCompaction($, {
+          outcome: 'fallback-low',
+          ratio,
+          ms: result.stats.ms,
+          reason: `below ${percent(config.minReductionRatio)}`,
+          agent,
+        });
         return next(event);
       }
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
+      const record: Omit<CompactionRecord, 'at'> = { outcome: 'jev', ratio, ms: result.stats.ms, agent };
+      if (tokensBefore !== undefined) record.tokensBefore = tokensBefore;
+      const dropped = droppedTokens(tokensBefore, ratio);
+      if (dropped !== undefined) record.tokensDropped = dropped;
+      logCompaction($, record);
       return { messages };
     } catch (error) {
-      notify(
-        $,
-        `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
-      );
+      const reason = error instanceof Error ? error.message : String(error);
+      notify($, `fallback to built-in summary (${reason})`);
+      logCompaction($, { outcome: 'fallback-error', reason, agent });
       return next(event);
     }
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     const answer = await next(event);
-    if (compacting) return answer;
+    let context: { tokens?: number; percent?: number };
     try {
-      const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return answer;
+      const usage = await $.session.usage();
+      context = usage.context;
+      const sample: Omit<TurnSample, 'at'> = { isAgent: event.agentId !== undefined };
+      if (event.usage) sample.usage = event.usage;
+      if (context.tokens !== undefined) sample.contextTokens = context.tokens;
+      if (usage.cost) sample.costUsd = usage.cost.usd;
+      withStats($, (stats, at) => void recordTurn(stats, { ...sample, at }));
     } catch (error) {
       $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
       return answer;
     }
+    if (compacting) return answer;
+    if ((context.percent ?? 0) < configured.compactAtPercent) return answer;
     compacting = true;
     void deferredCompact(
       () => $.session.compact(),

@@ -77,6 +77,21 @@ reduction, per-reason counts, state size and request count; a per-call
 reached `compactAtPercent`, requests compaction in the background (retrying
 while a new turn is running), with an in-flight guard.
 
+## Stats
+
+`/jev-stats` prints token and savings totals over every session,
+`/jev-stats session` the current one, `/jev-stats reset` clears them. The
+ledger lives in the plugin's `$.store`, one key per session (the 200 most
+recently active are kept), written from `turn.complete` (main and subagent
+token usage, Claude Code's cost) and `session.compact` (Jev or fallback,
+reduction, duration).
+
+`Dropped` is the context before a Jev compaction times its character
+reduction. `Saved` credits that drop once per later main-loop API call until
+the next compaction, calls per turn estimated as the turn's summed input over
+the last response's input. It is an estimate against keeping the pre-compaction
+context, and most of those tokens would have been cache reads.
+
 ## Scope and caveat
 
 Function hooks are early access and may change between Claude Code releases.
