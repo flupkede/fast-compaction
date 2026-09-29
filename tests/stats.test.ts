@@ -94,9 +94,9 @@ describe('stats', () => {
     expect(total.savedTokens).toBe(67_000);
     expect(total.recent.map((r) => r.outcome)).toEqual(['jev', 'fallback-error']);
     const report = formatReport(total, 'all sessions', 2);
-    expect(report).toContain('1 jev · 0 fallback (low reduction) · 1 fallback (error) · jev avg 600 ms');
-    expect(report).toContain('Saved        ~67K context tokens');
-    expect(report).toContain('cache hit 99.0%');
+    expect(report).toContain('1 by Jev · jev avg 600 ms · 1 fallback (0 low reduction, 1 error)');
+    expect(report).toContain('Saved        ~7K tokens at input price');
+    expect(report).toContain('1 turns · avg 100K context per turn · cache hit 99.0%');
     expect(report).toContain('$1.25');
     expect(report).toContain('167K → 100K  40%  600 ms');
   });

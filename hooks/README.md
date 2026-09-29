@@ -86,11 +86,11 @@ recently active are kept), written from `turn.complete` (main and subagent
 token usage, Claude Code's cost) and `session.compact` (Jev or fallback,
 reduction, duration).
 
-`Dropped` is the context before a Jev compaction times its character
-reduction. `Saved` credits that drop once per later main-loop API call until
-the next compaction, calls per turn estimated as the turn's summed input over
-the last response's input. It is an estimate against keeping the pre-compaction
-context. The input-equivalent figure prices it at the main loop's cache-read share (reads 0.1x, the rest full price); `Weighted` prices everything sent the same way (writes 1.25x).
+`Saved` credits each Jev drop (context before times character reduction) once
+per later main-loop API call until the next compaction, calls per turn
+estimated as the turn's summed input over the last response's input, then
+prices it at the main loop's cache-read share (reads 0.1x, the rest full
+price). It is an estimate against keeping the pre-compaction context.
 
 ## Scope and caveat
 

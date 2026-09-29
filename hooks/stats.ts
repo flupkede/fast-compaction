@@ -231,25 +231,18 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
   const hit = sent > 0 ? `${((u.cacheRead / sent) * 100).toFixed(1)}%` : 'n/a';
   const avgMs = c.jev > 0 ? Math.round(stats.jevMs / c.jev) : 0;
   const avgContext = u.turns > 0 ? formatTokens(sent / u.turns) : 'n/a';
+  const fallbacks = c['fallback-low'] + c['fallback-error'];
   const lines = [
-    `fast-jev-compaction stats: ${scope}, ${sessionCount} session(s) since ${
+    `fast-jev-compaction: ${scope}, ${sessionCount} session(s) since ${
       sessionCount > 0 ? stamp(stats.startedAt) : 'n/a'
     }`,
-    `Compactions  ${c.jev} jev · ${c['fallback-low']} fallback (low reduction) · ${c['fallback-error']} fallback (error)${
-      c.jev > 0 ? ` · jev avg ${avgMs} ms` : ''
+    `Compactions  ${c.jev} by Jev${c.jev > 0 ? ` · jev avg ${avgMs} ms` : ''} · ${
+      fallbacks > 0 ? `${fallbacks} fallback (${c['fallback-low']} low reduction, ${c['fallback-error']} error)` : 'no fallbacks'
     }`,
-    `Dropped      ${formatTokens(stats.droppedTokens)} tokens removed by Jev`,
-    `Saved        ~${formatTokens(stats.savedTokens)} context tokens not re-sent · ~${formatTokens(
-      weightedSaved(stats.savedTokens, stats.main),
-    )} input-equivalent at cache pricing (estimate)`,
-    `Weighted     ${formatTokens(weightedInput(u))} input-equivalent sent (cache read ${CACHE_READ_PRICE}x, write ${CACHE_WRITE_PRICE}x)`,
-    `Turns        ${stats.main.turns} main · ${stats.agents.turns} subagent · avg ${avgContext} input per turn`,
-    `Tokens       input ${formatTokens(u.input)} · cache read ${formatTokens(u.cacheRead)} · cache write ${formatTokens(
-      u.cacheWrite,
-    )} · output ${formatTokens(u.output)} · cache hit ${hit}`,
-    `Cost         $${stats.costUsd.toFixed(2)} (Claude Code cost ledger)`,
+    `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} tokens at input price (estimate)`,
+    `Cost         $${stats.costUsd.toFixed(2)} · ${u.turns} turns · avg ${avgContext} context per turn · cache hit ${hit}`,
   ];
   const last = stats.recent.slice(-recent);
-  if (last.length > 0) lines.push('', `Last ${last.length} compaction(s)`, ...last.map(recordLine));
+  if (last.length > 0) lines.push('', 'Recent', ...last.map(recordLine));
   return lines.join('\n');
 }

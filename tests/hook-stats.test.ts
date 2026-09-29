@@ -61,10 +61,10 @@ describe(`/${STATS_COMMAND}`, () => {
     const store = await seeded();
     const all = await statsCommand({ store }, '', 'mine', 0);
     expect(all).toContain('all sessions, 2 session(s)');
-    expect(all).toContain('1 jev · 0 fallback (low reduction) · 1 fallback (error)');
+    expect(all).toContain('1 fallback (0 low reduction, 1 error)');
     const own = await statsCommand({ store }, ' Session ', 'mine', 0);
     expect(own).toContain('this session, 1 session(s)');
-    expect(own).toContain('~60K context tokens not re-sent');
+    expect(own).toContain('Saved        ~6K tokens at input price');
   });
 
   it('resets only stats keys and rejects unknown arguments', async () => {
