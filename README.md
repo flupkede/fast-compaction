@@ -122,7 +122,7 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
-| `trainingLog` | off | Callback receiving one `TrainingRecord` per compaction (redacted state, questions, Jev's answers, decisions) for local training-data collection; a throwing logger is ignored |
+| `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions) for local training-data collection; a throwing logger is ignored |
 
 `createTrainingLogger({ dir })` turns that callback into an append-only
 JSONL writer (`compactions-YYYY-MM.jsonl`, default dir `~/.fast-jev/training`);

@@ -67,7 +67,7 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   minReductionRatio: number;
   model: string;
   jevTimeoutMs: number;
-  /** Log one training record per compaction to `trainingDir` (or its default). */
+  /** Log one training record per Jev compaction to `trainingDir` (or its default). */
   trainingLog: boolean;
   trainingDir?: string;
 };

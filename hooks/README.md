@@ -82,7 +82,7 @@ while a new turn is running), with an in-flight guard.
 
 ## Training data
 
-With `trainingLog: true`, every compaction appends one JSON line to
+With `trainingLog: true`, every compaction that asks Jev appends one JSON line to
 `trainingDir` (`compactions-YYYY-MM.jsonl`): the redacted state Jev saw, the
 questions asked, Jev's probabilities and the applied decisions. The state is
 the same redacted payload that goes to the TypeSafe API — secrets are already

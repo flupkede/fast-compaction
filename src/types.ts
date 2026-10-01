@@ -106,9 +106,11 @@ export interface CompactOptions {
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
   /**
-   * Receives one record per compaction (redacted state, questions, Jev's
-   * answers, the applied decisions) for local training-data collection.
-   * A logger that throws is ignored: logging never breaks compaction.
+   * Receives one record whenever Jev was asked (a compaction with no
+   * candidate calls asks nothing and logs nothing): redacted state,
+   * questions, Jev's answers, the applied decisions, for local
+   * training-data collection. A logger that throws is ignored: logging
+   * never breaks compaction.
    */
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
 }

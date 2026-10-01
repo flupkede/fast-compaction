@@ -11,7 +11,7 @@ export interface TrainingLogOptions {
 }
 
 /**
- * Appends one JSON line per compaction to `<dir>/compactions-YYYY-MM.jsonl`.
+ * Appends one JSON line per Jev compaction to `<dir>/compactions-YYYY-MM.jsonl`.
  * The directory is created on first use; the file rotates monthly. Data stays
  * on this machine.
  */
