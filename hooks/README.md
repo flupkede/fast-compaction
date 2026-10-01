@@ -57,13 +57,16 @@ The plugin declares these `userConfig` values in
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
 | `jevTimeoutMs` | `8000` |
+| `trainingLog` | `false` |
+| `trainingDir` | `~/.fast-jev/training` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
-`jevTimeoutMs` and `model` is passed straight to the library; see the root
+`jevTimeoutMs`, `model`, `trainingLog` and `trainingDir` is passed straight to
+the library; see the root
 README for what they do. The `session.compact` hook runs the Jev requests
 concurrently and stops waiting after `jevTimeoutMs`, inside the engine's hook
 budget. If Jev fails or times out,
@@ -76,6 +79,15 @@ reduction, per-reason counts, state size and request count; a per-call
 `turn.complete` hook lets the turn finish first, then, when `context.percent`
 reached `compactAtPercent`, requests compaction in the background (retrying
 while a new turn is running), with an in-flight guard.
+
+## Training data
+
+With `trainingLog: true`, every compaction appends one JSON line to
+`trainingDir` (`compactions-YYYY-MM.jsonl`): the redacted state Jev saw, the
+questions asked, Jev's probabilities and the applied decisions. The state is
+the same redacted payload that goes to the TypeSafe API — secrets are already
+scrubbed — and nothing is uploaded anywhere; it accumulates locally as labelled
+examples for a future locally trained judge model.
 
 ## Stats
 

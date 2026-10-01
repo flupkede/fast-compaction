@@ -63,6 +63,18 @@
       "title": "Jev timeout (ms)",
       "description": "How long compaction waits for Jev before falling back to the built-in summary; keep it under the engine's hook budget.",
       "default": 8000
+    },
+    "trainingLog": {
+      "type": "boolean",
+      "title": "Log training data",
+      "description": "Append one local JSONL record per compaction (redacted state, questions, Jev's answers, decisions) for future model training. Data never leaves this machine.",
+      "default": false
+    },
+    "trainingDir": {
+      "type": "string",
+      "title": "Training data directory",
+      "description": "Where trainingLog writes its JSONL files. Defaults to ~/.fast-jev/training.",
+      "default": ""
     }
   }
 }

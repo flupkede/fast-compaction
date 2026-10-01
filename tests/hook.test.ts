@@ -60,6 +60,7 @@ describe('hook config', () => {
       minReductionRatio: 0.25,
       model: 'jev-latest',
       jevTimeoutMs: 8000,
+      trainingLog: false,
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
@@ -72,6 +73,7 @@ describe('hook config', () => {
       compactAtPercent: 60,
       minReductionRatio: 0.25,
       jevTimeoutMs: 8000,
+      trainingLog: false,
     });
   });
 });

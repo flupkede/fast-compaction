@@ -6,12 +6,14 @@ import type {
   CompactOptions,
   CompactResult,
   CompactionState,
+  FittedState,
   JevAsker,
   JevQuestions,
   Message,
   ResolvedCompactOptions,
   ToolCall,
   ToolUse,
+  TrainingRecord,
 } from './types.js';
 
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
@@ -49,6 +51,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    trainingLog: options.trainingLog,
   };
 }
 
@@ -265,7 +268,7 @@ export async function compact(
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
-  let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
+  let fitted: FittedState = { state: { context: '', goal: '', history: [] }, tokens: 0, stage: '' };
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
@@ -287,6 +290,27 @@ export async function compact(
     calls,
     resolved.truncateHeadChars,
   );
+
+  if (resolved.trainingLog && candidates.length > 0) {
+    const questions: JevQuestions = Object.assign({}, ...candidates.map(questionsFor));
+    const record: TrainingRecord = {
+      schema: 1,
+      ts: new Date().toISOString(),
+      state: fitted.state,
+      stateTokens: fitted.tokens,
+      stateStage: fitted.stage,
+      questions,
+      answers: Object.fromEntries(answers),
+      decisions,
+      keepThreshold: resolved.keepThreshold,
+    };
+    try {
+      await resolved.trainingLog(record);
+    } catch {
+      // logging must never break compaction
+    }
+  }
+
   return {
     messages: kept,
     decisions,

@@ -105,6 +105,12 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Receives one record per compaction (redacted state, questions, Jev's
+   * answers, the applied decisions) for local training-data collection.
+   * A logger that throws is ignored: logging never breaks compaction.
+   */
+  trainingLog?: (record: TrainingRecord) => void | Promise<void>;
 }
 
 export interface ResolvedCompactOptions {
@@ -114,6 +120,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  trainingLog?: (record: TrainingRecord) => void | Promise<void>;
 }
 
 export interface CompactResult {
@@ -136,6 +143,24 @@ export interface CompactResult {
     requests: number;
     ms: number;
   };
+}
+
+/**
+ * One labelled compaction for future model training. `state` is the exact
+ * (already redacted, fitted) payload Jev saw; `answers` holds the real
+ * probabilities asked for the candidate calls only; `decisions` is what was
+ * applied (pinned entries carry synthetic 1.0 answers there).
+ */
+export interface TrainingRecord {
+  schema: 1;
+  ts: string;
+  state: CompactionState;
+  stateTokens: number;
+  stateStage: string;
+  questions: JevQuestions;
+  answers: Record<string, CallAnswer>;
+  decisions: CallDecision[];
+  keepThreshold: number;
 }
 
 /** The `state` of a Jev request: a string or any JSON-serialisable object. */
