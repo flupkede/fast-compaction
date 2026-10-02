@@ -76,6 +76,7 @@ describe('compact training log', () => {
     expect(records).toHaveLength(1);
     const record = records[0]!;
     expect(record.schema).toBe(1);
+    expect(record.source).toBe('live');
     expect(new Date(record.ts).toString()).not.toBe('Invalid Date');
     expect(record.state.goal).toBe('fix the test');
     expect(record.state.history.length).toBeGreaterThan(0);
@@ -88,6 +89,16 @@ describe('compact training log', () => {
     expect(record.answers).toEqual({ t1: { keepCall: 0.9, keepResult: 0.9 } });
     expect(record.decisions).toEqual(result.decisions);
     expect(record.keepThreshold).toBe(0.5);
+  });
+
+  it('tags replay provenance when trainingSource is set', async () => {
+    const records: TrainingRecord[] = [];
+    await compact(transcript(), fakeJev(), {
+      preserveRecentMessages: 0,
+      trainingSource: 'replay',
+      trainingLog: (record) => void records.push(record),
+    });
+    expect(records[0]!.source).toBe('replay');
   });
 
   it('logs nothing when no call was asked and never breaks compaction when the logger throws', async () => {
@@ -115,6 +126,7 @@ describe('createTrainingLogger', () => {
     const record: TrainingRecord = {
       schema: 1,
       ts: '2026-10-01T00:00:00.000Z',
+      source: 'live',
       state: { context: 'c', goal: 'g', history: [] },
       stateTokens: 10,
       stateStage: 'full',

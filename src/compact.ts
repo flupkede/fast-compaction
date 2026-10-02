@@ -23,6 +23,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  trainingSource: 'live',
 };
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
@@ -52,6 +53,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
     trainingLog: options.trainingLog,
+    trainingSource: options.trainingSource ?? 'live',
   };
 }
 
@@ -296,6 +298,7 @@ export async function compact(
     const record: TrainingRecord = {
       schema: 1,
       ts: new Date().toISOString(),
+      source: resolved.trainingSource,
       state: fitted.state,
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,

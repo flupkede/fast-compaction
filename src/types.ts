@@ -113,6 +113,8 @@ export interface CompactOptions {
    * never breaks compaction.
    */
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
+  /** Tag on the record's `source`; `'live'` unless a replay marks `'replay'`. */
+  trainingSource?: 'live' | 'replay';
 }
 
 export interface ResolvedCompactOptions {
@@ -123,6 +125,7 @@ export interface ResolvedCompactOptions {
   maxRequestTokens: number;
   truncateHeadChars: number;
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
+  trainingSource: 'live' | 'replay';
 }
 
 export interface CompactResult {
@@ -156,6 +159,8 @@ export interface CompactResult {
 export interface TrainingRecord {
   schema: 1;
   ts: string;
+  /** Where the compaction ran: live in a client hook, or replayed from a stored transcript. */
+  source: 'live' | 'replay';
   state: CompactionState;
   stateTokens: number;
   stateStage: string;
