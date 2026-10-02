@@ -123,6 +123,7 @@ put it in a source file.
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 | `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions) for local training-data collection; a throwing logger is ignored |
+| `strip` | off | Identifier pseudonymisation applied after secret redaction: paths, URLs, e-mails, GUIDs, IPs, domains and a `blocklist` become stable tokens (`[PATH_1]`, `[URL_2]`, …) before anything is sent |
 
 `createTrainingLogger({ dir })` turns that callback into an append-only
 JSONL writer (`compactions-YYYY-MM.jsonl`, default dir `~/.fast-jev/training`);
@@ -141,6 +142,16 @@ npm run replay -- --dry-run        # count sessions, candidate calls, ~requests
 npm run replay -- --limit 10       # first real batch (needs TYPESAFE_API_KEY)
 npm run replay                     # everything; re-run to resume where it stopped
 ```
+
+**Privacy.** Identifier stripping is ON by default for replay
+(`--no-strip` disables): after secret redaction, paths, URLs, e-mails, GUIDs,
+IPs, domains and any `--blocklist <file>` terms (one per line, `#` comments)
+are replaced by stable tokens, so client names and repository layouts never
+reach the API. TypeSafe's privacy policy states they "will not train or fine
+tune any artificial intelligence or machine learning models on Input" and will
+not disclose it beyond service providers, but retention is open-ended and
+US-hosted — stripping is the client-side control, and the only fully safe
+option is not sending data at all.
 
 Progress is ledgered in `replay-index.json` inside the training dir, so an
 interrupted run continues instead of duplicating records; sessions that failed

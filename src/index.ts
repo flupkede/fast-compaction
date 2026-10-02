@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './redact.js';
+export * from './strip.js';
 export * from './request.js';
 export * from './client.js';
 export * from './state.js';

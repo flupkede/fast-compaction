@@ -67,9 +67,9 @@ export interface SessionPlan {
 }
 
 /** Counts what a replay of this transcript would ask, without asking it. */
-export function planReplay(messages: readonly Message[]): SessionPlan {
-  const resolved = resolveOptions();
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+export function planReplay(messages: readonly Message[], options: CompactOptions = {}): SessionPlan {
+  const resolved = resolveOptions(options);
+  const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip);
   const candidates = calls.filter((call) => !call.pinned);
   if (candidates.length === 0) {
     return { messages: messages.length, calls: 0, requests: 0, tokens: 0 };
@@ -116,6 +116,10 @@ export interface ReplayArgs {
   limit?: number;
   delayMs?: number;
   minMessages?: number;
+  /** Disable the identifier stripping replay enables by default. */
+  noStrip?: boolean;
+  /** File with blocklist terms, one per line. */
+  blocklistPath?: string;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
@@ -145,6 +149,8 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     else if (arg === '--limit') args.limit = number(arg, argv[++i]);
     else if (arg === '--delay-ms') args.delayMs = number(arg, argv[++i]);
     else if (arg === '--min-messages') args.minMessages = number(arg, argv[++i]);
+    else if (arg === '--no-strip') args.noStrip = true;
+    else if (arg === '--blocklist') args.blocklistPath = value(arg, argv[++i]);
     else throw new Error(`unknown argument "${arg}"`);
   }
   return args;
@@ -166,6 +172,8 @@ export interface ReplayRunOptions {
   delayMs: number;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /** Library options applied to every replayed compaction (e.g. `strip`). */
+  compactOptions?: CompactOptions;
 }
 
 export interface ReplayRunSummary {
@@ -254,7 +262,7 @@ export async function runReplay(
           return write;
         };
         try {
-          await replaySession(messages, asker, observing);
+          await replaySession(messages, asker, observing, options.compactOptions);
           await write;
           if (!emitted) throw new Error('no training record emitted');
           index[source.key] = { at: options.now(), records: 1 };

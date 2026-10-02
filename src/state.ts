@@ -1,4 +1,5 @@
 import { redactText, redactValue } from './redact.js';
+import type { Stripper } from './strip.js';
 import type {
   CompactionState,
   FittedState,
@@ -63,6 +64,7 @@ export function isPinned(
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  strip?: Stripper,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -75,11 +77,12 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
+      const redacted = redactValue(tool.input);
       calls.push({
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
         tool: tool.tool,
-        input: redactValue(tool.input),
+        input: strip ? strip.value(redacted) : redacted,
         callIndex,
         resultIndex: found.index,
         resultChars: found.result.text.length,
@@ -153,6 +156,7 @@ function historyEntries(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   inputChars: number,
+  strip?: Stripper,
 ): HistoryEntry[] {
   const byMessage = callsByMessage(calls);
   const entries: HistoryEntry[] = [];
@@ -164,7 +168,12 @@ function historyEntries(
       result: resultNote(call),
     }));
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
-    const entry: HistoryEntry = { i, role: message.role, text: redactText(message.text) };
+    const redacted = redactText(message.text);
+    const entry: HistoryEntry = {
+      i,
+      role: message.role,
+      text: strip ? strip.text(redacted) : redacted,
+    };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;
     entries.push(entry);
   });
@@ -172,7 +181,7 @@ function historyEntries(
 }
 
 /** The last three user prompts, as the default `goal`. */
-export function goalFromMessages(messages: readonly Message[]): string {
+export function goalFromMessages(messages: readonly Message[], strip?: Stripper): string {
   return messages
     .filter(
       (message) =>
@@ -181,7 +190,10 @@ export function goalFromMessages(messages: readonly Message[]): string {
         (message.toolResults ?? []).length === 0,
     )
     .slice(-3)
-    .map((message) => truncate(redactText(message.text), 500))
+    .map((message) => {
+      const redacted = redactText(message.text);
+      return truncate(strip ? strip.text(redacted) : redacted, 500);
+    })
     .join('\n');
 }
 
@@ -196,9 +208,10 @@ export function goalFromMessages(messages: readonly Message[]): string {
 export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
-  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,
+  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal' | 'strip'>,
 ): FittedState {
-  const goal = options.goal || goalFromMessages(messages);
+  const strip = options.strip;
+  const goal = options.goal || goalFromMessages(messages, strip);
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
     context: STATE_CONTEXT,
     goal,
@@ -216,7 +229,7 @@ export function fitState(
   let perEntry: number[] = [];
   let tokens = 0;
   const rebuild = (inputChars: number): void => {
-    history = historyEntries(messages, calls, inputChars);
+    history = historyEntries(messages, calls, inputChars, strip);
     perEntry = history.map(entryTokens);
     tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   };

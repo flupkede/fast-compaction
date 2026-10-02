@@ -1,3 +1,5 @@
+import type { StripConfig, Stripper } from './strip.js';
+
 export type Role = 'user' | 'assistant';
 
 /**
@@ -115,6 +117,12 @@ export interface CompactOptions {
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   /** Tag on the record's `source`; `'live'` unless a replay marks `'replay'`. */
   trainingSource?: 'live' | 'replay';
+  /**
+   * Identifier pseudonymisation (paths, URLs, e-mails, GUIDs, IPs, domains,
+   * blocklist) applied after secret redaction, before anything is sent.
+   * Off by default for live compaction; the replay CLI turns it on.
+   */
+  strip?: StripConfig;
 }
 
 export interface ResolvedCompactOptions {
@@ -126,6 +134,7 @@ export interface ResolvedCompactOptions {
   truncateHeadChars: number;
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   trainingSource: 'live' | 'replay';
+  strip?: Stripper;
 }
 
 export interface CompactResult {

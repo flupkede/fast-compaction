@@ -3,7 +3,7 @@
  * pipeline and appends one replay-tagged training record per session that
  * asks Jev. Run `npm run replay -- --help` for options.
  */
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,6 +17,7 @@ import {
   planReplay,
   runReplay,
   TYPESAFE_API_KEY_ENV,
+  type CompactOptions,
   type Message,
   type ReplaySourceSpec,
 } from '../src/index.js';
@@ -42,11 +43,16 @@ Options:
   --limit <n>             replay at most n sessions this run
   --delay-ms <n>          pause between replayed sessions (default 500)
   --min-messages <n>      skip OpenCode sessions with fewer stored messages (default 8)
+  --no-strip              disable identifier pseudonymisation (paths, URLs,
+                          e-mails, GUIDs, IPs, domains, blocklist)
+  --blocklist <path>      file with extra terms (client names), one per line
 
 Requires ${TYPESAFE_API_KEY_ENV} unless --dry-run. Reading OpenCode requires Node >= 22.5.
-Records carry the same redacted state a live compaction sends; nothing but the
-Jev requests leaves this machine. Re-run to resume: finished sessions are
-ledgered in <dir>/replay-index.json.
+Identifier stripping is ON by default: identifiers become stable tokens
+([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
+Records carry the same stripped state Jev saw; nothing but the Jev requests
+leaves this machine. Re-run to resume: finished sessions are ledgered in
+<dir>/replay-index.json.
 `;
 
 async function claudeSources(root: string): Promise<ReplaySourceSpec[]> {
@@ -76,6 +82,16 @@ async function main(): Promise<void> {
   const dir = args.dir ?? DEFAULTS.dir;
   const delayMs = args.delayMs ?? DEFAULTS.delayMs;
   const minMessages = args.minMessages ?? DEFAULTS.minMessages;
+  let compactOptions: CompactOptions | undefined;
+  if (!args.noStrip) {
+    const blocklist = args.blocklistPath
+      ? (await readFile(args.blocklistPath, 'utf8'))
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0 && !line.startsWith('#'))
+      : [];
+    compactOptions = blocklist.length > 0 ? { strip: { blocklist } } : { strip: {} };
+  }
   const sources: ReplaySourceSpec[] = [];
   if (args.source !== 'opencode') {
     const claude = await claudeSources(args.claudeRoot ?? DEFAULTS.claudeRoot);
@@ -108,7 +124,7 @@ async function main(): Promise<void> {
         console.error(`  unreadable ${source.key}: ${error instanceof Error ? error.message : error}`);
         continue;
       }
-      const plan = planReplay(messages);
+      const plan = planReplay(messages, compactOptions);
       sessions++;
       calls += plan.calls;
       requests += plan.requests;
@@ -119,7 +135,7 @@ async function main(): Promise<void> {
       }
     }
     console.log(
-      `\ndry run: ${sessions} session(s), ${calls} candidate call(s), ~${requests} Jev request(s), ~${tokens} state tokens, ${errors} error(s)`,
+      `\ndry run: ${sessions} session(s), ${calls} candidate call(s), ~${requests} Jev request(s), ~${tokens} state tokens, ${errors} error(s)${args.noStrip ? '' : ', identifiers stripped'}`,
     );
     console.log(`run without --dry-run (needs ${TYPESAFE_API_KEY_ENV}) to write the records.`);
     return;
@@ -135,6 +151,7 @@ async function main(): Promise<void> {
       dir,
       limit: args.limit,
       delayMs,
+      compactOptions,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
     },

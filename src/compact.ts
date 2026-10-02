@@ -1,4 +1,5 @@
 import { noulAnswer } from './request.js';
+import { createStripper } from './strip.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
   CallAnswer,
@@ -54,6 +55,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     ),
     trainingLog: options.trainingLog,
     trainingSource: options.trainingSource ?? 'live',
+    strip: options.strip ? createStripper(options.strip) : undefined,
   };
 }
 
@@ -266,7 +268,7 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip);
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
