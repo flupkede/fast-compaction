@@ -3,6 +3,7 @@
  * pipeline and appends one replay-tagged training record per session that
  * asks Jev. Run `npm run replay -- --help` for options.
  */
+import { access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -82,9 +83,15 @@ async function main(): Promise<void> {
     sources.push(...claude);
   }
   if (args.source !== 'claude') {
-    const opencode = await opencodeSources(args.opencodeDb ?? DEFAULTS.opencodeDb, minMessages);
-    console.log(`opencode: ${opencode.length} session(s)`);
-    sources.push(...opencode);
+    const dbPath = args.opencodeDb ?? DEFAULTS.opencodeDb;
+    // an explicitly named database must exist; a missing default is just skipped
+    if (args.opencodeDb !== undefined || (await access(dbPath).then(() => true, () => false))) {
+      const opencode = await opencodeSources(dbPath, minMessages);
+      console.log(`opencode: ${opencode.length} session(s)`);
+      sources.push(...opencode);
+    } else {
+      console.log(`opencode: no database at ${dbPath}; use --opencode-db or --source claude`);
+    }
   }
   if (args.dryRun) {
     let sessions = 0;

@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { batchCalls, compact, resolveOptions } from './compact.js';
 import { collectToolCalls, fitState } from './state.js';
@@ -27,10 +27,14 @@ export async function loadReplayIndex(dir: string): Promise<ReplayIndex> {
 
 export async function saveReplayIndex(dir: string, index: ReplayIndex): Promise<void> {
   await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, REPLAY_INDEX_FILE), `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+  const target = join(dir, REPLAY_INDEX_FILE);
+  const tmp = `${target}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(index, null, 2)}\n`, 'utf8');
+  // rename over the old ledger so a crash mid-write cannot leave partial JSON behind
+  await rename(tmp, target);
 }
 
-/** Every Claude Code session file under `root`, recursively, oldest-path-first. */
+/** Every Claude Code session file under `root`, recursively, in deterministic path order. */
 export async function listClaudeTranscriptFiles(root: string): Promise<string[]> {
   const out: string[] = [];
   const walk = async (dir: string): Promise<void> => {
@@ -178,12 +182,34 @@ export interface ReplayRunSummary {
  * the resume ledger after each session so an interrupted run continues where
  * it stopped. `onSession` observes progress; throws only on ledger corruption.
  */
+export interface ReplayRunSummary {
+  sessions: number;
+  replayed: number;
+  records: number;
+  skippedDone: number;
+  noCandidates: number;
+  errors: number;
+  /** True when the run stopped early after repeated Jev failures. */
+  stoppedAfterFailures: boolean;
+}
+
+/** Jev calls failing back-to-back before the run gives up (likely an outage). */
+const MAX_CONSECUTIVE_FAILURES = 5;
+
+/**
+ * Replays every not-yet-ledgered source through `replaySession`, persisting
+ * the resume ledger after each session so an interrupted run continues where
+ * it stopped. Transient failures (session unreadable, Jev or record-write
+ * failing) stay unledgered and retry on the next run; deterministic ones
+ * (history unfittable) are ledgered as errors. `onSession` observes progress;
+ * throws only on ledger corruption.
+ */
 export async function runReplay(
   sources: readonly ReplaySourceSpec[],
   asker: JevAsker,
   trainingLog: (record: import('./types.js').TrainingRecord) => void | Promise<void>,
   options: ReplayRunOptions,
-  onSession?: (event: { key: string; outcome: 'replayed' | 'done' | 'no-candidates' | 'error'; detail?: string }) => void,
+  onSession?: (event: { key: string; outcome: 'replayed' | 'done' | 'no-candidates' | 'error' | 'stopped'; detail?: string }) => void,
 ): Promise<ReplayRunSummary> {
   const index = await loadReplayIndex(options.dir);
   const summary: ReplayRunSummary = {
@@ -193,38 +219,30 @@ export async function runReplay(
     skippedDone: 0,
     noCandidates: 0,
     errors: 0,
+    stoppedAfterFailures: false,
   };
+  let consecutiveFailures = 0;
   for (const source of sources) {
-    if (options.limit !== undefined && summary.replayed >= options.limit) break;
+    if (options.limit !== undefined && summary.replayed + summary.errors >= options.limit) break;
     if (index[source.key]) {
       summary.skippedDone++;
       continue;
     }
     summary.sessions++;
-    let messages: readonly Message[];
+    let ledgered = true;
     try {
-      messages = await source.load();
-    } catch (error) {
-      index[source.key] = {
-        at: options.now(),
-        error: error instanceof Error ? error.message : String(error),
-      };
-      summary.errors++;
-      onSession?.({ key: source.key, outcome: 'error', detail: index[source.key]!.error });
-      await saveReplayIndex(options.dir, index);
-      continue;
-    }
-    const plan = planReplay(messages);
-    if (plan.error) {
-      index[source.key] = { at: options.now(), error: plan.error };
-      summary.errors++;
-      onSession?.({ key: source.key, outcome: 'error', detail: plan.error });
-    } else if (plan.calls === 0) {
-      index[source.key] = { at: options.now(), records: 0 };
-      summary.noCandidates++;
-      onSession?.({ key: source.key, outcome: 'no-candidates' });
-    } else {
-      try {
+      const messages = await source.load();
+      const plan = planReplay(messages);
+      if (plan.error) {
+        index[source.key] = { at: options.now(), error: plan.error };
+        summary.errors++;
+        onSession?.({ key: source.key, outcome: 'error', detail: plan.error });
+      } else if (plan.calls === 0) {
+        index[source.key] = { at: options.now(), records: 0 };
+        summary.noCandidates++;
+        onSession?.({ key: source.key, outcome: 'no-candidates' });
+        consecutiveFailures = 0;
+      } else {
         // observe the record append: a swallowed write failure must stay retriable
         let emitted = false;
         let write: Promise<void> = Promise.resolve();
@@ -235,30 +253,52 @@ export async function runReplay(
           })();
           return write;
         };
-        await replaySession(messages, asker, observing);
-        await write;
-        if (!emitted) throw new Error('no training record emitted');
-        index[source.key] = { at: options.now(), records: 1 };
-        summary.replayed++;
-        summary.records++;
-        onSession?.({
-          key: source.key,
-          outcome: 'replayed',
-          detail: `${plan.requests} request(s), ${plan.calls} calls`,
-        });
-      } catch (error) {
-        // network/runtime failures stay retriable: no ledger entry
-        summary.errors++;
-        onSession?.({
-          key: source.key,
-          outcome: 'error',
-          detail: error instanceof Error ? error.message : String(error),
-        });
-        continue;
+        try {
+          await replaySession(messages, asker, observing);
+          await write;
+          if (!emitted) throw new Error('no training record emitted');
+          index[source.key] = { at: options.now(), records: 1 };
+          summary.replayed++;
+          summary.records++;
+          consecutiveFailures = 0;
+          onSession?.({
+            key: source.key,
+            outcome: 'replayed',
+            detail: `${plan.requests} request(s), ${plan.calls} calls`,
+          });
+        } catch (error) {
+          // network/write failures stay retriable: no ledger entry
+          ledgered = false;
+          summary.errors++;
+          consecutiveFailures++;
+          onSession?.({
+            key: source.key,
+            outcome: 'error',
+            detail: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
+    } catch (error) {
+      // a transient read failure (file locked, being written) must retry next run
+      ledgered = false;
+      summary.errors++;
+      onSession?.({
+        key: source.key,
+        outcome: 'error',
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
-    await saveReplayIndex(options.dir, index);
+    if (ledgered) await saveReplayIndex(options.dir, index);
     if (options.delayMs > 0) await options.sleep(options.delayMs);
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      summary.stoppedAfterFailures = true;
+      onSession?.({
+        key: '',
+        outcome: 'stopped',
+        detail: `${MAX_CONSECUTIVE_FAILURES} consecutive Jev failures; stopping (re-run to resume)`,
+      });
+      break;
+    }
   }
   return summary;
 }

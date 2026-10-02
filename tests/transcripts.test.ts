@@ -343,14 +343,22 @@ describe('runReplay', () => {
       { key: 's:broken', label: 'broken', load: async () => { throw new Error('gone'); } },
     ];
     const summary = await runReplay(sources, asker(), (r) => void records.push(r), deps(dir));
-    expect(summary).toEqual({ sessions: 3, replayed: 1, records: 1, skippedDone: 1, noCandidates: 1, errors: 1 });
+    expect(summary).toEqual({
+      sessions: 3,
+      replayed: 1,
+      records: 1,
+      skippedDone: 1,
+      noCandidates: 1,
+      errors: 1,
+      stoppedAfterFailures: false,
+    });
     expect(records).toHaveLength(1);
     expect(records[0]!.source).toBe('replay');
     const index = await loadReplayIndex(dir);
     expect(index['s:good']).toEqual({ at: 1234, records: 1 });
     expect(index['s:tiny']).toEqual({ at: 1234, records: 0 });
-    expect(index['s:broken']!.error).toBe('gone');
     expect(index['s:done']).toEqual({ at: 1, records: 1 });
+    expect(index['s:broken']).toBeUndefined();
   });
 
   it('leaves a failed Jev call unledgered so a re-run retries it, and honors the limit', async () => {
@@ -360,13 +368,42 @@ describe('runReplay', () => {
       { key: 'b', label: 'b', load: async () => good },
     ];
     const failing = await runReplay(sources, asker(true), () => {}, deps(dir));
-    expect(failing).toEqual({ sessions: 2, replayed: 0, records: 0, skippedDone: 0, noCandidates: 0, errors: 2 });
+    expect(failing).toEqual({
+      sessions: 2,
+      replayed: 0,
+      records: 0,
+      skippedDone: 0,
+      noCandidates: 0,
+      errors: 2,
+      stoppedAfterFailures: false,
+    });
     expect(await loadReplayIndex(dir)).toEqual({});
 
     const records: TrainingRecord[] = [];
     const limited = await runReplay(sources, asker(), (r) => void records.push(r), { ...deps(dir), limit: 1 });
     expect(limited.replayed).toBe(1);
     expect(records).toHaveLength(1);
+  });
+
+  it('stops after five consecutive Jev failures instead of hammering the API', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = Array.from({ length: 7 }, (_, i) => ({
+      key: `f${i}`,
+      label: `f${i}`,
+      load: async () => good,
+    }));
+    const events: string[] = [];
+    const summary = await runReplay(
+      sources,
+      asker(true),
+      () => {},
+      { ...deps(dir), delayMs: 0 },
+      (event) => events.push(event.outcome),
+    );
+    expect(summary.stoppedAfterFailures).toBe(true);
+    expect(summary.sessions).toBe(5);
+    expect(events.filter((outcome) => outcome === 'error')).toHaveLength(5);
+    expect(events[events.length - 1]).toBe('stopped');
   });
 
   it('treats a failed record write as retriable: no ledger entry, counted as error', async () => {
@@ -380,7 +417,15 @@ describe('runReplay', () => {
       },
       deps(dir),
     );
-    expect(summary).toEqual({ sessions: 1, replayed: 0, records: 0, skippedDone: 0, noCandidates: 0, errors: 1 });
+    expect(summary).toEqual({
+      sessions: 1,
+      replayed: 0,
+      records: 0,
+      skippedDone: 0,
+      noCandidates: 0,
+      errors: 1,
+      stoppedAfterFailures: false,
+    });
     expect(await loadReplayIndex(dir)).toEqual({});
   });
 
