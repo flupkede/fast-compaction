@@ -10,6 +10,7 @@ import type {
 
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
+import { TYPESAFE_API_KEY_ENV } from '../src/client.js';
 import { createTrainingLogger } from '../src/training-log.js';
 import type {
   CompactOptions,
@@ -201,7 +202,7 @@ export async function compactSession(
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+  if (!config.apiKey) throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured`);
   const { trainingLog, trainingDir, ...rest } = config;
   const options: CompactOptions = trainingLog
     ? { ...rest, trainingLog: createTrainingLogger(trainingDir ? { dir: trainingDir } : {}) }
@@ -368,12 +369,12 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
+  const fromEnv = await $.env.get(TYPESAFE_API_KEY_ENV);
   if (fromEnv) return fromEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
+    const value = (env as Record<string, unknown>)[TYPESAFE_API_KEY_ENV];
     if (typeof value === 'string' && value) return value;
   }
   return undefined;

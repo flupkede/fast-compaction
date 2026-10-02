@@ -1,6 +1,8 @@
 import { buildJevRequest, parseJevResponse } from './request.js';
 import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
 
+export const TYPESAFE_API_KEY_ENV = 'TYPESAFE_API_KEY';
+
 export interface JevClientOptions {
   /** Defaults to `process.env.TYPESAFE_API_KEY`. */
   apiKey?: string;
@@ -20,14 +22,14 @@ export class JevClient implements JevAsker {
   private readonly fetcher: typeof fetch;
 
   constructor(options: JevClientOptions = {}) {
-    this.apiKey = options.apiKey ?? process.env.TYPESAFE_API_KEY ?? '';
+    this.apiKey = options.apiKey ?? process.env[TYPESAFE_API_KEY_ENV] ?? '';
     this.model = options.model;
     this.baseUrl = options.baseUrl;
     this.fetcher = options.fetch ?? fetch;
   }
 
   async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
-    if (!this.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
+    if (!this.apiKey) throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured`);
     const request = buildJevRequest(
       { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },
       state,

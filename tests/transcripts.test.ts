@@ -11,10 +11,12 @@ import {
   parseClaudeTranscript,
   planReplay,
   replaySession,
+  runReplay,
   saveReplayIndex,
   type JevAsker,
   type JevQuestions,
   type Message,
+  type ReplaySourceSpec,
   type TrainingRecord,
 } from '../src/index.js';
 
@@ -287,5 +289,131 @@ describe('replay index', () => {
     expect(await loadReplayIndex(dir)).toEqual({ 'claude:x': { at: 1, records: 2 } });
     await writeFile(join(dir, 'replay-index.json'), '{broken', 'utf8');
     await expect(loadReplayIndex(dir)).rejects.toThrow();
+  });
+});
+
+describe('runReplay', () => {
+  const good: Message[] = [
+    { role: 'user', text: 'Fix the test', toolUses: [] },
+    {
+      role: 'assistant',
+      text: '',
+      toolUses: [{ tool_use_id: 't1', tool: 'Read', input: { file_path: 'a.ts' } }],
+    },
+    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't1', text: 'a'.repeat(2000) }] },
+    { role: 'assistant', text: 'reading', toolUses: [] },
+    { role: 'user', text: 'and then', toolUses: [] },
+    { role: 'assistant', text: 'fixing', toolUses: [] },
+    { role: 'user', text: 'ok', toolUses: [] },
+    { role: 'assistant', text: 'done', toolUses: [] },
+    { role: 'user', text: 'thanks', toolUses: [] },
+    { role: 'assistant', text: 'bye', toolUses: [] },
+  ];
+
+  function asker(fail = false): JevAsker {
+    return {
+      async ask(_state, questions: JevQuestions) {
+        if (fail) throw new Error('api down');
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+        };
+      },
+    };
+  }
+
+  function deps(dir: string) {
+    return {
+      dir,
+      delayMs: 0,
+      sleep: async () => {},
+      now: () => 1234,
+    };
+  }
+
+  it('replays new sources, skips ledgered ones, records no-candidates and load errors', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, { 's:done': { at: 1, records: 1 } });
+    const records: TrainingRecord[] = [];
+    const sources: ReplaySourceSpec[] = [
+      { key: 's:done', label: 'done', load: async () => good },
+      { key: 's:good', label: 'good', load: async () => good },
+      { key: 's:tiny', label: 'tiny', load: async () => [{ role: 'user', text: 'hi', toolUses: [] }] },
+      { key: 's:broken', label: 'broken', load: async () => { throw new Error('gone'); } },
+    ];
+    const summary = await runReplay(sources, asker(), (r) => void records.push(r), deps(dir));
+    expect(summary).toEqual({ sessions: 3, replayed: 1, records: 1, skippedDone: 1, noCandidates: 1, errors: 1 });
+    expect(records).toHaveLength(1);
+    expect(records[0]!.source).toBe('replay');
+    const index = await loadReplayIndex(dir);
+    expect(index['s:good']).toEqual({ at: 1234, records: 1 });
+    expect(index['s:tiny']).toEqual({ at: 1234, records: 0 });
+    expect(index['s:broken']!.error).toBe('gone');
+    expect(index['s:done']).toEqual({ at: 1, records: 1 });
+  });
+
+  it('leaves a failed Jev call unledgered so a re-run retries it, and honors the limit', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = [
+      { key: 'a', label: 'a', load: async () => good },
+      { key: 'b', label: 'b', load: async () => good },
+    ];
+    const failing = await runReplay(sources, asker(true), () => {}, deps(dir));
+    expect(failing).toEqual({ sessions: 2, replayed: 0, records: 0, skippedDone: 0, noCandidates: 0, errors: 2 });
+    expect(await loadReplayIndex(dir)).toEqual({});
+
+    const records: TrainingRecord[] = [];
+    const limited = await runReplay(sources, asker(), (r) => void records.push(r), { ...deps(dir), limit: 1 });
+    expect(limited.replayed).toBe(1);
+    expect(records).toHaveLength(1);
+  });
+
+  it('treats a failed record write as retriable: no ledger entry, counted as error', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = [{ key: 'a', label: 'a', load: async () => good }];
+    const summary = await runReplay(
+      sources,
+      asker(),
+      () => {
+        throw new Error('disk full');
+      },
+      deps(dir),
+    );
+    expect(summary).toEqual({ sessions: 1, replayed: 0, records: 0, skippedDone: 0, noCandidates: 0, errors: 1 });
+    expect(await loadReplayIndex(dir)).toEqual({});
+  });
+
+  it('sleeps between replayed sessions when delayMs is set', async () => {
+    const dir = await tempDir();
+    const slept: number[] = [];
+    const sources: ReplaySourceSpec[] = [
+      { key: 'a', label: 'a', load: async () => good },
+      { key: 'b', label: 'b', load: async () => good },
+    ];
+    const summary = await runReplay(sources, asker(), () => {}, {
+      ...deps(dir),
+      delayMs: 7,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect(summary.replayed).toBe(2);
+    expect(slept).toEqual([7, 7]);
+  });
+});
+
+describe('parseReplayArgs', () => {
+  it('parses flags and rejects unknown flags, bad sources and malformed numbers', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(parseReplayArgs(['--dry-run', '--source', 'claude', '--limit', '3'])).toEqual({
+      dryRun: true,
+      source: 'claude',
+      limit: 3,
+    });
+    expect(() => parseReplayArgs(['--nope'])).toThrow(/unknown argument/);
+    expect(() => parseReplayArgs(['--source', 'cursor'])).toThrow(/--source/);
+    expect(() => parseReplayArgs(['--limit'])).toThrow(/needs a value/);
+    expect(() => parseReplayArgs(['--limit', '-1'])).toThrow(/>= 0/);
   });
 });

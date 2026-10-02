@@ -128,6 +128,29 @@ put it in a source file.
 JSONL writer (`compactions-YYYY-MM.jsonl`, default dir `~/.fast-jev/training`);
 the data stays on the local machine.
 
+## Replaying stored sessions
+
+Historical sessions carry no labels — Jev's judgment only exists where a
+compaction actually ran. `scripts/replay-training.ts` replays stored Claude
+Code (`~/.claude/projects/**/*.jsonl`) and OpenCode (`opencode.db`) sessions
+through the live pipeline and writes one `source: "replay"` record per session
+that asks Jev, using the same redaction as live compaction:
+
+```sh
+npm run replay -- --dry-run        # count sessions, candidate calls, ~requests
+npm run replay -- --limit 10       # first real batch (needs TYPESAFE_API_KEY)
+npm run replay                     # everything; re-run to resume where it stopped
+```
+
+Progress is ledgered in `replay-index.json` inside the training dir, so an
+interrupted run continues instead of duplicating records; sessions that failed
+against the API stay unledgered and retry. `--source claude|opencode|both`,
+`--delay-ms` (default 500 between sessions), `--dir`, `--claude-root`,
+`--opencode-db` and `--min-messages` tune the sweep. Reading OpenCode needs
+Node >= 22.5 (`node:sqlite`). Replay labels are Jev judging a session's end
+state rather than a mid-session compaction; records keep `source` so training
+can tell them apart.
+
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts, the state size in estimated tokens, which fitting
 stage was needed, and the number of requests.
