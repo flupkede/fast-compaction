@@ -461,4 +461,64 @@ describe('parseReplayArgs', () => {
     expect(() => parseReplayArgs(['--limit'])).toThrow(/needs a value/);
     expect(() => parseReplayArgs(['--limit', '-1'])).toThrow(/>= 0/);
   });
+
+  it('parses the local-judge flags and rejects a bad asker', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(
+      parseReplayArgs(['--asker', 'ollama', '--base-url', 'http://pc:11434/v1/systemone', '--model', 'clef-flash']),
+    ).toMatchObject({
+      asker: 'ollama',
+      baseUrl: 'http://pc:11434/v1/systemone',
+      model: 'clef-flash',
+    });
+    expect(parseReplayArgs(['--asker', 'cloud'])).toMatchObject({ asker: 'cloud' });
+    expect(() => parseReplayArgs(['--asker', 'chatgpt'])).toThrow(/--asker/);
+  });
+});
+
+describe('buildAsker', () => {
+  const realFetch = globalThis.fetch;
+  const posted: { url: string; model?: string }[] = [];
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  async function loadBuildAsker() {
+    return (await import('../scripts/replay-training.ts')).buildAsker;
+  }
+
+  it('routes the ollama asker to the local endpoint with the clef-flash model', async () => {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ url: String(url), model: (JSON.parse(String(init?.body)) as { model?: string }).model });
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    const buildAsker = await loadBuildAsker();
+    const asker = buildAsker({ dryRun: false, source: 'both', asker: 'ollama' });
+    const response = await asker.ask('state', {
+      q1: { type: 'noul', instructions: 'irrelevant' },
+    });
+    expect(posted[0]!.url).toBe('http://localhost:11434/v1/systemone');
+    expect(posted[0]!.model).toBe('clef-flash');
+    expect(response.answers.q1).toEqual({ type: 'noul', noul: 0.5 });
+  });
+
+  it('keeps the cloud path key-gated', async () => {
+    const buildAsker = await loadBuildAsker();
+    const saved = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    try {
+      expect(() => buildAsker({ dryRun: false, source: 'both' })).toThrow(/--asker ollama/);
+    } finally {
+      if (saved !== undefined) process.env.TYPESAFE_API_KEY = saved;
+    }
+  });
+
+  it('passes baseUrl through resolveHookConfig', async () => {
+    const { resolveHookConfig } = await import('../hooks/fast-jev.ts');
+    expect(resolveHookConfig({ baseUrl: 'http://pc:11434/v1/systemone' }).baseUrl).toBe(
+      'http://pc:11434/v1/systemone',
+    );
+    expect(resolveHookConfig({}).baseUrl).toBeUndefined();
+  });
 });

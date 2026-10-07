@@ -195,4 +195,22 @@ describe('compactSession', () => {
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
   });
+
+  it('posts to baseUrl when a local judge endpoint is configured, without an API key', async () => {
+    const urls: string[] = [];
+    const bodies: string[] = [];
+    const config = {
+      ...resolveHookConfig({ preserveRecentMessages: 1 }),
+      baseUrl: 'http://pc:11434/v1/systemone',
+      model: 'clef-flash',
+    };
+    const fetch = async (url: string, init?: { body?: string }) => {
+      urls.push(url);
+      return jevFetch(() => 0.9, bodies)(url, init);
+    };
+    const { result } = await compactSession(transcript(), config, fetch);
+    expect(urls).toEqual(['http://pc:11434/v1/systemone']);
+    expect(JSON.parse(bodies[0]!).model).toBe('clef-flash');
+    expect(result.stats.requests).toBe(1);
+  });
 });

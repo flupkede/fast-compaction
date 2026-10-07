@@ -54,9 +54,15 @@
     },
     "model": {
       "type": "string",
-      "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
+      "title": "Judge model",
+      "description": "Model name sent with every request (e.g. jev-latest, or clef-flash on a local Ollama).",
       "default": "jev-latest"
+    },
+    "baseUrl": {
+      "type": "string",
+      "title": "Judge endpoint (local model)",
+      "description": "Full System One endpoint to post to. Set to e.g. http://desktop:11434/v1/systemone to use a local Ollama decision model; then no API key is needed. Leave empty for the TypeSafe cloud.",
+      "default": ""
     },
     "jevTimeoutMs": {
       "type": "number",

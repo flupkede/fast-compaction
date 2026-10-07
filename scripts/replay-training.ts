@@ -6,19 +6,24 @@
 import { access, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   createTrainingLogger,
   DEFAULT_TRAINING_DIR,
   JevClient,
   listClaudeTranscriptFiles,
   loadClaudeTranscript,
+  OLLAMA_MODEL,
+  OLLAMA_SYSTEM_ONE_URL,
   openOpencodeTranscripts,
   parseReplayArgs,
   planReplay,
   runReplay,
   TYPESAFE_API_KEY_ENV,
   type CompactOptions,
+  type JevAsker,
   type Message,
+  type ReplayArgs,
   type ReplaySourceSpec,
 } from '../src/index.js';
 
@@ -46,12 +51,16 @@ Options:
   --no-strip              disable identifier pseudonymisation (paths, URLs,
                           e-mails, GUIDs, IPs, domains, blocklist)
   --blocklist <path>      file with extra terms (client names), one per line
+  --asker <which>         cloud (TypeSafe, needs ${TYPESAFE_API_KEY_ENV}) or
+                          ollama (local decision model, e.g. clef-flash)
+  --base-url <url>        full System One endpoint for --asker ollama
+                          (default ${OLLAMA_SYSTEM_ONE_URL})
+  --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
 
-Requires ${TYPESAFE_API_KEY_ENV} unless --dry-run. Reading OpenCode requires Node >= 22.5.
 Identifier stripping is ON by default: identifiers become stable tokens
 ([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
-Records carry the same stripped state Jev saw; nothing but the Jev requests
-leaves this machine. Re-run to resume: finished sessions are ledgered in
+With --asker ollama nothing leaves this machine at all. Reading OpenCode
+requires Node >= 22.5. Re-run to resume: finished sessions are ledgered in
 <dir>/replay-index.json.
 `;
 
@@ -70,6 +79,21 @@ async function opencodeSources(dbPath: string, minMessages: number): Promise<Rep
     label: `${session.title} (${session.directory})`,
     load: async (): Promise<readonly Message[]> => transcripts.messages(session.id),
   }));
+}
+
+/** Picks the judge from the parsed flags: local Ollama, or the TypeSafe cloud. */
+export function buildAsker(args: ReplayArgs): JevAsker {
+  if (args.asker === 'ollama') {
+    return new JevClient({
+      baseUrl: args.baseUrl ?? OLLAMA_SYSTEM_ONE_URL,
+      apiKey: 'ollama',
+      model: args.model ?? OLLAMA_MODEL,
+    });
+  }
+  if (!process.env[TYPESAFE_API_KEY_ENV]) {
+    throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured (or use --asker ollama)`);
+  }
+  return new JevClient();
 }
 
 async function main(): Promise<void> {
@@ -137,15 +161,12 @@ async function main(): Promise<void> {
     console.log(
       `\ndry run: ${sessions} session(s), ${calls} candidate call(s), ~${requests} Jev request(s), ~${tokens} state tokens, ${errors} error(s)${args.noStrip ? '' : ', identifiers stripped'}`,
     );
-    console.log(`run without --dry-run (needs ${TYPESAFE_API_KEY_ENV}) to write the records.`);
+    console.log(`run without --dry-run to write the records (cloud needs ${TYPESAFE_API_KEY_ENV}).`);
     return;
-  }
-  if (!process.env[TYPESAFE_API_KEY_ENV]) {
-    throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured`);
   }
   const summary = await runReplay(
     sources,
-    new JevClient(),
+    buildAsker(args),
     createTrainingLogger({ dir }),
     {
       dir,
@@ -163,7 +184,12 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+// run only when invoked directly; importing (tests) must stay side-effect free
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

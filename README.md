@@ -153,6 +153,23 @@ not disclose it beyond service providers, but retention is open-ended and
 US-hosted — stripping is the client-side control, and the only fully safe
 option is not sending data at all.
 
+## Local judge (Ollama)
+
+Any System One-compatible endpoint can be the judge — including a local
+Ollama decision model (e.g. Cloudflare's `clef-flash`), in which case nothing
+ever leaves your machine and no API key is needed:
+
+```sh
+ollama pull clef-flash            # needs Ollama >= 0.35.1
+npm run replay -- --asker ollama --base-url http://pc:11434/v1/systemone
+```
+
+The hook takes the same choice through its `baseUrl` plugin option (plus
+`model: clef-flash` and a raised `jevTimeoutMs` — local inference is slower
+than the cloud API and the hook falls back to the built-in summary on
+timeout). The library layer is unchanged: `new JevClient({ baseUrl, apiKey:
+'ollama', model })`.
+
 Progress is ledgered in `replay-index.json` inside the training dir, so an
 interrupted run continues instead of duplicating records; sessions that failed
 against the API stay unledgered and retry. `--source claude|opencode|both`,

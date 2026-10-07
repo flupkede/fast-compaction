@@ -106,6 +106,9 @@ export async function replaySession(
 
 export type ReplaySourceKind = 'claude' | 'opencode' | 'both';
 
+export const OLLAMA_SYSTEM_ONE_URL = 'http://localhost:11434/v1/systemone';
+export const OLLAMA_MODEL = 'clef-flash';
+
 /** Flags `replay-training` accepts; strings left unset take the script defaults. */
 export interface ReplayArgs {
   dryRun: boolean;
@@ -120,6 +123,12 @@ export interface ReplayArgs {
   noStrip?: boolean;
   /** File with blocklist terms, one per line. */
   blocklistPath?: string;
+  /** `ollama` targets a local Ollama decision model; default `cloud` needs an API key. */
+  asker?: 'cloud' | 'ollama';
+  /** Full System One endpoint for `--asker ollama`. */
+  baseUrl?: string;
+  /** Model name for `--asker ollama` (e.g. `clef-flash`). */
+  model?: string;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
@@ -151,6 +160,14 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     else if (arg === '--min-messages') args.minMessages = number(arg, argv[++i]);
     else if (arg === '--no-strip') args.noStrip = true;
     else if (arg === '--blocklist') args.blocklistPath = value(arg, argv[++i]);
+    else if (arg === '--asker') {
+      const kind = value(arg, argv[++i]);
+      if (kind !== 'cloud' && kind !== 'ollama') {
+        throw new Error(`--asker must be cloud or ollama, got "${kind}"`);
+      }
+      args.asker = kind;
+    } else if (arg === '--base-url') args.baseUrl = value(arg, argv[++i]);
+    else if (arg === '--model') args.model = value(arg, argv[++i]);
     else throw new Error(`unknown argument "${arg}"`);
   }
   return args;

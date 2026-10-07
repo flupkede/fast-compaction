@@ -68,6 +68,12 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   minReductionRatio: number;
   model: string;
   jevTimeoutMs: number;
+  /**
+   * Full System One endpoint to post to; when set, the request goes there
+   * instead of the TypeSafe API and no API key is needed (e.g. a local
+   * Ollama decision model at `http://host:11434/v1/systemone`).
+   */
+  baseUrl?: string;
   /** Log one training record per Jev compaction to `trainingDir` (or its default). */
   trainingLog: boolean;
   trainingDir?: string;
@@ -119,14 +125,21 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (goal) config.goal = goal;
   const trainingDir = optionString(options, 'trainingDir');
   if (trainingDir) config.trainingDir = trainingDir;
+  const baseUrl = optionString(options, 'baseUrl');
+  if (baseUrl) config.baseUrl = baseUrl;
   return config;
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+export function jevAsker(
+  fetchFn: HookFetch,
+  apiKey: string,
+  model: string,
+  baseUrl?: string,
+): JevAsker {
   return {
     async ask(state, questions) {
-      const request = buildJevRequest({ apiKey, model }, state, questions);
+      const request = buildJevRequest({ apiKey, model, baseUrl }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
         headers: request.headers,
@@ -196,18 +209,27 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/** Runs the library over a session transcript; throws when no judge is configured or it fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured`);
+  if (!config.apiKey && !config.baseUrl) {
+    throw new Error(
+      `no judge configured: set ${TYPESAFE_API_KEY_ENV} for the cloud, or baseUrl for a local decision model`,
+    );
+  }
+  const apiKey = config.apiKey ?? 'local';
   const { trainingLog, trainingDir, ...rest } = config;
   const options: CompactOptions = trainingLog
     ? { ...rest, trainingLog: createTrainingLogger(trainingDir ? { dir: trainingDir } : {}) }
     : rest;
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), options);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, apiKey, config.model, config.baseUrl),
+    options,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
