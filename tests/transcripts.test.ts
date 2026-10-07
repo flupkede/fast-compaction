@@ -581,3 +581,19 @@ describe('buildAsker', () => {
     expect(resolveHookConfig({}).baseUrl).toBeUndefined();
   });
 });
+
+describe('buildCompactOptions', () => {
+  it('keeps maxStateTokens and stripping composed', async () => {
+    const { buildCompactOptions } = await import('../scripts/replay-training.ts');
+    expect(buildCompactOptions({ maxStateTokens: 1500, blocklistPath: undefined }, ['APRI'])).toEqual({
+      maxStateTokens: 1500,
+      strip: { blocklist: ['APRI'] },
+    });
+    // the pre-fix bug: strip overwrote the token ceiling wholesale
+    expect(buildCompactOptions({ maxStateTokens: 1500 }, [])).toEqual({
+      maxStateTokens: 1500,
+      strip: {},
+    });
+    expect(buildCompactOptions({ noStrip: true }, [])).toEqual({});
+  });
+});

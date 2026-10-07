@@ -98,6 +98,19 @@ export function buildAsker(args: ReplayArgs): JevAsker {
   return new JevClient();
 }
 
+/** Builds compactOptions from the parsed flags: token ceiling + identifier stripping. */
+export function buildCompactOptions(
+  args: Pick<ReplayArgs, 'maxStateTokens' | 'noStrip' | 'blocklistPath'>,
+  blocklist: string[],
+): CompactOptions {
+  let options: CompactOptions = {};
+  if (args.maxStateTokens !== undefined) options = { ...options, maxStateTokens: args.maxStateTokens };
+  if (!args.noStrip) {
+    options = { ...options, strip: blocklist.length > 0 ? { blocklist } : {} };
+  }
+  return options;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -108,22 +121,15 @@ async function main(): Promise<void> {
   const dir = args.dir ?? DEFAULTS.dir;
   const delayMs = args.delayMs ?? DEFAULTS.delayMs;
   const minMessages = args.minMessages ?? DEFAULTS.minMessages;
-  let compactOptions: CompactOptions | undefined;
-  if (args.maxStateTokens !== undefined) {
-    compactOptions = { ...compactOptions, maxStateTokens: args.maxStateTokens };
-  }
-  if (!args.noStrip) {
-    const blocklist = args.blocklistPath
+  const blocklist = args.noStrip
+    ? []
+    : args.blocklistPath
       ? (await readFile(args.blocklistPath, 'utf8'))
           .split(/\r?\n/)
           .map((line) => line.trim())
           .filter((line) => line.length > 0 && !line.startsWith('#'))
       : [];
-    compactOptions = {
-      ...compactOptions,
-      strip: blocklist.length > 0 ? { blocklist } : {},
-    };
-  }
+  const compactOptions = buildCompactOptions(args, blocklist);
   const sources: ReplaySourceSpec[] = [];
   if (args.source !== 'opencode') {
     const claude = await claudeSources(args.claudeRoot ?? DEFAULTS.claudeRoot);
