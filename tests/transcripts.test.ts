@@ -310,10 +310,10 @@ describe('runReplay', () => {
     { role: 'assistant', text: 'bye', toolUses: [] },
   ];
 
-  function asker(fail = false): JevAsker {
+  function asker(fail = false, message = 'api down'): JevAsker {
     return {
       async ask(_state, questions: JevQuestions) {
-        if (fail) throw new Error('api down');
+        if (fail) throw new Error(message);
         return {
           answers: Object.fromEntries(
             Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
@@ -427,6 +427,41 @@ describe('runReplay', () => {
       stoppedAfterFailures: false,
     });
     expect(await loadReplayIndex(dir)).toEqual({});
+  });
+
+  it('ledgers a deterministic input-ceiling 400 like a plan error; transient failures stay retriable', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = [
+      { key: 'sized', label: 'sized', load: async () => good },
+      { key: 'flaky', label: 'flaky', load: async () => good },
+    ];
+    let first = true;
+    const summary = await runReplay(
+      sources,
+      {
+        async ask(_state, questions: JevQuestions) {
+          if (first) {
+            first = false;
+            throw new Error(
+              'Jev request failed (400): {"error":"prompt 0 has 2355 tokens; expected 1–2050 (input is never truncated)"}',
+            );
+          }
+          return {
+            answers: Object.fromEntries(
+              Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+            ),
+          };
+        },
+      },
+      () => {},
+      deps(dir),
+    );
+    expect(summary.errors).toBe(1);
+    expect(summary.replayed).toBe(1);
+    expect(summary.stoppedAfterFailures).toBe(false);
+    const index = await loadReplayIndex(dir);
+    expect(index.sized?.error).toMatch(/input is never truncated/);
+    expect(index.flaky?.records).toBe(1);
   });
 
   it('sleeps between replayed sessions when delayMs is set', async () => {

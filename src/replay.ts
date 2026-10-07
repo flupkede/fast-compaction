@@ -295,15 +295,19 @@ export async function runReplay(
             detail: `${plan.requests} request(s), ${plan.calls} calls`,
           });
         } catch (error) {
-          // network/write failures stay retriable: no ledger entry
-          ledgered = false;
-          summary.errors++;
-          consecutiveFailures++;
-          onSession?.({
-            key: source.key,
-            outcome: 'error',
-            detail: error instanceof Error ? error.message : String(error),
-          });
+          const detail = error instanceof Error ? error.message : String(error);
+          if (/Jev request failed \(400\): .*input is never truncated/.test(detail)) {
+            // the judge's input ceiling is deterministic at fixed options: ledger like a plan error
+            index[source.key] = { at: options.now(), error: detail };
+            summary.errors++;
+            onSession?.({ key: source.key, outcome: 'error', detail });
+          } else {
+            // network/write failures stay retriable: no ledger entry
+            ledgered = false;
+            summary.errors++;
+            consecutiveFailures++;
+            onSession?.({ key: source.key, outcome: 'error', detail });
+          }
         }
       }
     } catch (error) {
