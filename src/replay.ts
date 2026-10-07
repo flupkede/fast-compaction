@@ -260,7 +260,7 @@ export async function runReplay(
     let ledgered = true;
     try {
       const messages = await source.load();
-      const plan = planReplay(messages);
+      const plan = planReplay(messages, options.compactOptions);
       if (plan.error) {
         index[source.key] = { at: options.now(), error: plan.error };
         summary.errors++;

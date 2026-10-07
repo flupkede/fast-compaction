@@ -464,6 +464,22 @@ describe('runReplay', () => {
     expect(index.flaky?.records).toBe(1);
   });
 
+  it('planning sees compactOptions: an oversized session is a ledgered plan error, not a breaker trip', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = [
+      { key: 'big', label: 'big', load: async () => good },
+      { key: 'next', label: 'next', load: async () => good },
+    ];
+    const summary = await runReplay(sources, asker(), () => {}, {
+      ...deps(dir),
+      compactOptions: { maxStateTokens: 10 },
+    });
+    expect(summary.errors).toBe(2);
+    expect(summary.replayed).toBe(0);
+    expect(summary.stoppedAfterFailures).toBe(false);
+    expect((await loadReplayIndex(dir)).big?.error).toMatch(/too large/);
+  });
+
   it('sleeps between replayed sessions when delayMs is set', async () => {
     const dir = await tempDir();
     const slept: number[] = [];
