@@ -474,6 +474,14 @@ describe('parseReplayArgs', () => {
     expect(parseReplayArgs(['--asker', 'cloud'])).toMatchObject({ asker: 'cloud' });
     expect(() => parseReplayArgs(['--asker', 'chatgpt'])).toThrow(/--asker/);
   });
+
+  it('parses --max-state-tokens and validates the number', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(parseReplayArgs(['--max-state-tokens', '2000'])).toMatchObject({ maxStateTokens: 2000 });
+    expect(() => parseReplayArgs(['--max-state-tokens'])).toThrow(/needs a value/);
+    expect(() => parseReplayArgs(['--max-state-tokens', 'abc'])).toThrow(/>= 0/);
+    expect(() => parseReplayArgs(['--max-state-tokens', '-5'])).toThrow(/>= 0/);
+  });
 });
 
 describe('buildAsker', () => {

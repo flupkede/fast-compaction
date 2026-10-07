@@ -129,6 +129,8 @@ export interface ReplayArgs {
   baseUrl?: string;
   /** Model name for `--asker ollama` (e.g. `clef-flash`). */
   model?: string;
+  /** Overrides the state token ceiling (default 25000; shrink for small-context models). */
+  maxStateTokens?: number;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
@@ -168,6 +170,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
       args.asker = kind;
     } else if (arg === '--base-url') args.baseUrl = value(arg, argv[++i]);
     else if (arg === '--model') args.model = value(arg, argv[++i]);
+    else if (arg === '--max-state-tokens') args.maxStateTokens = number(arg, argv[++i]);
     else throw new Error(`unknown argument "${arg}"`);
   }
   return args;

@@ -56,6 +56,8 @@ Options:
   --base-url <url>        full System One endpoint for --asker ollama
                           (default ${OLLAMA_SYSTEM_ONE_URL})
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
+  --max-state-tokens <n>  state token ceiling (default 25000; local models with
+                          small context, e.g. tev1:4b, need ~2000)
 
 Identifier stripping is ON by default: identifiers become stable tokens
 ([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
@@ -107,6 +109,9 @@ async function main(): Promise<void> {
   const delayMs = args.delayMs ?? DEFAULTS.delayMs;
   const minMessages = args.minMessages ?? DEFAULTS.minMessages;
   let compactOptions: CompactOptions | undefined;
+  if (args.maxStateTokens !== undefined) {
+    compactOptions = { ...compactOptions, maxStateTokens: args.maxStateTokens };
+  }
   if (!args.noStrip) {
     const blocklist = args.blocklistPath
       ? (await readFile(args.blocklistPath, 'utf8'))
@@ -114,7 +119,10 @@ async function main(): Promise<void> {
           .map((line) => line.trim())
           .filter((line) => line.length > 0 && !line.startsWith('#'))
       : [];
-    compactOptions = blocklist.length > 0 ? { strip: { blocklist } } : { strip: {} };
+    compactOptions = {
+      ...compactOptions,
+      strip: blocklist.length > 0 ? { blocklist } : {},
+    };
   }
   const sources: ReplaySourceSpec[] = [];
   if (args.source !== 'opencode') {
