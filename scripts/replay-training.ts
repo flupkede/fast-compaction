@@ -83,6 +83,31 @@ async function opencodeSources(dbPath: string, minMessages: number): Promise<Rep
   }));
 }
 
+/**
+ * Hard ceiling per judge request. A local model can loop indefinitely on
+ * degenerate content (observed: clef-flash never answering a repeated-text
+ * state), and Node's own 5-minute headers timeout aborts with a message the
+ * ledger cannot classify — so the client aborts first, with a phrase the
+ * replay ledger treats as deterministic.
+ */
+export const REQUEST_TIMEOUT_MS = 240_000;
+
+/** Fetch that aborts after `timeoutMs` with a ledger-classifiable error. */
+export function fetchWithTimeout(timeoutMs: number): typeof fetch {
+  return (url, init) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { ...init, signal: controller.signal })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          throw new Error(`Jev request timed out (no answer within ${timeoutMs / 1000}s)`);
+        }
+        throw error;
+      })
+      .finally(() => clearTimeout(timer));
+  };
+}
+
 /** Picks the judge from the parsed flags: local Ollama, or the TypeSafe cloud. */
 export function buildAsker(args: ReplayArgs): JevAsker {
   if (args.asker === 'ollama') {
@@ -90,6 +115,7 @@ export function buildAsker(args: ReplayArgs): JevAsker {
       baseUrl: args.baseUrl ?? OLLAMA_SYSTEM_ONE_URL,
       apiKey: 'ollama',
       model: args.model ?? OLLAMA_MODEL,
+      fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
     });
   }
   if (!process.env[TYPESAFE_API_KEY_ENV]) {

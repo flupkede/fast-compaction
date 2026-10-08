@@ -435,10 +435,12 @@ describe('runReplay', () => {
       { key: 'sized', label: 'sized', load: async () => good },
       { key: 'huge', label: 'huge', load: async () => good },
       { key: 'flaky', label: 'flaky', load: async () => good },
+      { key: 'ok', label: 'ok', load: async () => good },
     ];
     const deterministic = [
       'Jev request failed (400): {"error":"prompt 0 has 2355 tokens; expected 1–2050 (input is never truncated)"}',
       'Jev request failed (413): {"error":"text and schema must not exceed 64 KiB"}',
+      'Jev request timed out (no answer within 240s)',
     ];
     let attempt = 0;
     const summary = await runReplay(
@@ -458,13 +460,14 @@ describe('runReplay', () => {
       () => {},
       deps(dir),
     );
-    expect(summary.errors).toBe(2);
+    expect(summary.errors).toBe(3);
     expect(summary.replayed).toBe(1);
     expect(summary.stoppedAfterFailures).toBe(false);
     const index = await loadReplayIndex(dir);
     expect(index.sized?.error).toMatch(/input is never truncated/);
     expect(index.huge?.error).toMatch(/64 KiB/);
-    expect(index.flaky?.records).toBe(1);
+    expect(index.flaky?.error).toMatch(/timed out/);
+    expect(index.ok?.records).toBe(1);
   });
 
   it('planning sees compactOptions: an oversized session is a ledgered plan error, not a breaker trip', async () => {
@@ -598,5 +601,22 @@ describe('buildCompactOptions', () => {
       strip: {},
     });
     expect(buildCompactOptions({ noStrip: true }, [])).toEqual({});
+  });
+});
+
+describe('fetchWithTimeout', () => {
+  it('aborts a hanging judge and surfaces a ledgerable timeout error', async () => {
+    const { fetchWithTimeout, REQUEST_TIMEOUT_MS } = await import('../scripts/replay-training.ts');
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted by test harness')));
+      })) as typeof fetch;
+    try {
+      await expect(fetchWithTimeout(10)('http://judge', undefined)).rejects.toThrow(/timed out/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });
