@@ -296,18 +296,21 @@ export async function runReplay(
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          // deterministic iff the judge rejects the size or visibly fails on
-          // it: the 400 phrase comes from Ollama's systemone route ("prompt N
-          // has X tokens; expected 1–Y (input is never truncated)"), the 413
-          // from its 64 KiB body cap ("text and schema must not exceed 64
-          // KiB"), and the replay script turns its own client timeout into
-          // "Jev request timed out" when a local model loops forever on a
-          // state. All are fixed outcomes at fixed options; anything else
-          // (network, 5xx, write failures) stays retriable.
+          // deterministic iff the judge rejects the size, visibly fails on it,
+          // or crashes on it: the 400 phrase comes from Ollama's systemone
+          // route ("prompt N has X tokens; expected 1–Y (input is never
+          // truncated)"), the 413 from its 64 KiB body cap ("text and schema
+          // must not exceed 64 KiB"), the replay script turns its own client
+          // timeout into "Jev request timed out" when a local model loops
+          // forever, and a 500 "llama-server process has terminated" is the
+          // backend segfaulting (observed 0xc0000005) on specific states.
+          // All are fixed outcomes at fixed options; anything else (network,
+          // 5xx, write failures) stays retriable.
           if (
             /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
             /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
-            /Jev request timed out/.test(detail)
+            /Jev request timed out/.test(detail) ||
+            /Jev request failed \(500\): .*llama-server process has terminated/.test(detail)
           ) {
             // the judge's input ceiling is deterministic at fixed options: ledger like a plan error
             index[source.key] = { at: options.now(), error: detail };

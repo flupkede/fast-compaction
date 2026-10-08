@@ -435,12 +435,14 @@ describe('runReplay', () => {
       { key: 'sized', label: 'sized', load: async () => good },
       { key: 'huge', label: 'huge', load: async () => good },
       { key: 'flaky', label: 'flaky', load: async () => good },
+      { key: 'crashy', label: 'crashy', load: async () => good },
       { key: 'ok', label: 'ok', load: async () => good },
     ];
     const deterministic = [
       'Jev request failed (400): {"error":"prompt 0 has 2355 tokens; expected 1–2050 (input is never truncated)"}',
       'Jev request failed (413): {"error":"text and schema must not exceed 64 KiB"}',
       'Jev request timed out (no answer within 240s)',
+      'Jev request failed (500): {"error":"llama-server process has terminated: exit status 0xc0000005"}',
     ];
     let attempt = 0;
     const summary = await runReplay(
@@ -460,13 +462,14 @@ describe('runReplay', () => {
       () => {},
       deps(dir),
     );
-    expect(summary.errors).toBe(3);
+    expect(summary.errors).toBe(4);
     expect(summary.replayed).toBe(1);
     expect(summary.stoppedAfterFailures).toBe(false);
     const index = await loadReplayIndex(dir);
     expect(index.sized?.error).toMatch(/input is never truncated/);
     expect(index.huge?.error).toMatch(/64 KiB/);
     expect(index.flaky?.error).toMatch(/timed out/);
+    expect(index.crashy?.error).toMatch(/llama-server/);
     expect(index.ok?.records).toBe(1);
   });
 
