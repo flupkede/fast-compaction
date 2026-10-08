@@ -75,7 +75,9 @@ export function questionsFor(call: ToolCall): JevQuestions {
 
 /**
  * Splits the candidate calls into batches whose questions, together with the
- * (always complete) state, fit one request.
+ * (always complete) state, fit one request. Each call carries two questions
+ * (`keepCall` + `keepResult`) and the System One route accepts at most 64
+ * question fields per request, hence the 32-call cap.
  */
 export function batchCalls(
   calls: readonly ToolCall[],
@@ -88,7 +90,7 @@ export function batchCalls(
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && currentTokens + tokens > budget) {
+    if (current.length > 0 && (currentTokens + tokens > budget || current.length >= 32)) {
       batches.push(current);
       current = [];
       currentTokens = 0;

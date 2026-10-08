@@ -244,6 +244,13 @@ describe('question batching', () => {
     expect(batchCalls(calls, 1000, options)).toHaveLength(1);
   });
 
+  it('caps a batch at 32 calls so a request never exceeds 64 questions', () => {
+    const many: ToolCall[] = Array.from({ length: 75 }, (_, i) => ({ ...calls[0]!, id: `t${i}` }));
+    const batches = batchCalls(many, 1000, options);
+    expect(batches.map((b) => b.length)).toEqual([32, 32, 11]);
+    expect(batches.flat().map((c) => c.id)).toEqual(many.map((c) => c.id));
+  });
+
   it('splits questions across requests when the state leaves little room', () => {
     const batches = batchCalls(calls, 29_600, options);
     expect(batches.length).toBeGreaterThan(1);

@@ -433,18 +433,20 @@ describe('runReplay', () => {
     const dir = await tempDir();
     const sources: ReplaySourceSpec[] = [
       { key: 'sized', label: 'sized', load: async () => good },
+      { key: 'huge', label: 'huge', load: async () => good },
       { key: 'flaky', label: 'flaky', load: async () => good },
     ];
-    let first = true;
+    const deterministic = [
+      'Jev request failed (400): {"error":"prompt 0 has 2355 tokens; expected 1–2050 (input is never truncated)"}',
+      'Jev request failed (413): {"error":"text and schema must not exceed 64 KiB"}',
+    ];
+    let attempt = 0;
     const summary = await runReplay(
       sources,
       {
         async ask(_state, questions: JevQuestions) {
-          if (first) {
-            first = false;
-            throw new Error(
-              'Jev request failed (400): {"error":"prompt 0 has 2355 tokens; expected 1–2050 (input is never truncated)"}',
-            );
+          if (attempt < deterministic.length) {
+            throw new Error(deterministic[attempt++]);
           }
           return {
             answers: Object.fromEntries(
@@ -456,11 +458,12 @@ describe('runReplay', () => {
       () => {},
       deps(dir),
     );
-    expect(summary.errors).toBe(1);
+    expect(summary.errors).toBe(2);
     expect(summary.replayed).toBe(1);
     expect(summary.stoppedAfterFailures).toBe(false);
     const index = await loadReplayIndex(dir);
     expect(index.sized?.error).toMatch(/input is never truncated/);
+    expect(index.huge?.error).toMatch(/64 KiB/);
     expect(index.flaky?.records).toBe(1);
   });
 

@@ -296,12 +296,17 @@ export async function runReplay(
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          // deterministic iff the judge rejects the size: the phrase comes from
-          // Ollama's systemone route ("prompt N has X tokens; expected 1–Y
-          // (input is never truncated)") and is truncated into Error.message by
-          // src/request.ts — a wording change reverts oversized sessions to
-          // transient failures, which only costs re-asking, never data loss.
-          if (/Jev request failed \(400\): .*input is never truncated/.test(detail)) {
+          // deterministic iff the judge rejects the size: the 400 phrase comes
+          // from Ollama's systemone route ("prompt N has X tokens; expected
+          // 1–Y (input is never truncated)") and the 413 from its 64 KiB body
+          // cap ("text and schema must not exceed 64 KiB"), truncated into
+          // Error.message by src/request.ts — a wording change reverts
+          // oversized sessions to transient failures, which only costs
+          // re-asking, never data loss.
+          if (
+            /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
+            /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail)
+          ) {
             // the judge's input ceiling is deterministic at fixed options: ledger like a plan error
             index[source.key] = { at: options.now(), error: detail };
             summary.errors++;
