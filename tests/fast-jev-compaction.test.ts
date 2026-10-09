@@ -430,7 +430,11 @@ describe('compact', () => {
       { preserveRecentMessages: 1 },
     );
     expect(seen.flatMap((r) => r.questions).sort()).toEqual(['msg_1']);
-    expect(output.messageDecisions?.every ?? true).toBeTruthy();
+    expect(output.messageDecisions).toEqual([
+      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 1, keep: false, reason: 'dropped' }),
+      expect.objectContaining({ i: 2, keep: true, reason: 'recent' }),
+    ]);
     expect(output.messages).toHaveLength(2);
     expect(output.messages[1]?.text).toBe('latest question');
     expect(output.stats).toMatchObject({ messagesDropped: 1, requests: 1 });

@@ -1,6 +1,6 @@
 import { noulAnswer } from './request.js';
 import { createStripper } from './strip.js';
-import { collectToolCalls, estimateTokens, fitState } from './state.js';
+import { collectToolCalls, estimateTokens, fitState, isPinned } from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -127,7 +127,16 @@ const EMPTY_FITTED: FittedState = {
 };
 
 /** Splits a list into fixed-size chunks (last one may be shorter). */
-const MESSAGE_BATCH_QUESTIONS = 48; // 64-question route cap, one question per entry
+const MESSAGE_BATCH_QUESTIONS = 48; // hard cap: 64-question route limit, one per entry
+
+/** Question-token cost of one `msg_<i>` question (constant instructions). */
+const MESSAGE_QUESTION_TOKENS = 64;
+
+/** Message batch size bounded by the same request budget the call batches use. */
+export function messageChunkSize(stateTokens: number, maxRequestTokens: number): number {
+  const room = maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
+  return Math.max(1, Math.min(MESSAGE_BATCH_QUESTIONS, Math.floor(room / MESSAGE_QUESTION_TOKENS)));
+}
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -355,8 +364,7 @@ export async function compact(
   let proseEntries: HistoryEntry[] = [];
   let messageCandidates: HistoryEntry[] = [];
   const protectedIndex = (i: number): boolean =>
-    // mirrors the tool-call pinning: the seed message and the recent window
-    i === 0 || i >= messages.length - resolved.preserveRecentMessages;
+    isPinned(i, messages.length, resolved.preserveRecentMessages);
   if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved);
     fitted = state;
@@ -373,7 +381,12 @@ export async function compact(
     fitted = fitted ?? fitState(messages, calls, resolved);
     proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
     messageCandidates = proseEntries.filter((entry) => !protectedIndex(entry.i));
-    const messageChunks = chunk(messageCandidates, MESSAGE_BATCH_QUESTIONS);
+    // note: prose entries the fitter left out entirely (late shrink stage on
+    // very large histories) are never judged and survive compaction untouched
+    const messageChunks = chunk(
+      messageCandidates,
+      messageChunkSize(fitted.tokens, resolved.maxRequestTokens),
+    );
     for (const batch of messageChunks) {
       const map = await askMessageBatch(asker, fitted.state, batch);
       for (const [i, noul] of map) messageAnswers.set(i, noul);
@@ -418,6 +431,9 @@ export async function compact(
       decisions,
       keepThreshold: resolved.keepThreshold,
       messageQuestions,
+      messageAnswers: Object.fromEntries(
+        [...messageAnswers].map(([i, noul]) => [`msg_${i}`, noul]),
+      ),
       messageDecisions,
     };
     try {
@@ -444,7 +460,12 @@ export async function compact(
       messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
       stateTokens: (fitted ?? EMPTY_FITTED).tokens,
       stateStage: (fitted ?? EMPTY_FITTED).stage,
-      requests: batches.length + Math.ceil(messageCandidates.length / MESSAGE_BATCH_QUESTIONS),
+      requests:
+        batches.length +
+        Math.ceil(
+          messageCandidates.length /
+            messageChunkSize((fitted ?? EMPTY_FITTED).tokens, resolved.maxRequestTokens),
+        ),
       ms: Date.now() - started,
     },
   };

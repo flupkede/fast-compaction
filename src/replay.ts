@@ -1,7 +1,12 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { batchCalls, compact, resolveOptions } from './compact.js';
-import { collectToolCalls, fitState } from './state.js';
+import {
+  batchCalls,
+  compact,
+  messageChunkSize,
+  resolveOptions,
+} from './compact.js';
+import { collectToolCalls, fitState, isPinned } from './state.js';
 import type { CompactOptions, CompactResult, JevAsker, Message } from './types.js';
 
 export interface ReplayIndexEntry {
@@ -58,6 +63,8 @@ export interface SessionPlan {
   messages: number;
   /** Candidate calls Jev would be asked about. */
   calls: number;
+  /** Judgeable prose entries (outside the protected window). */
+  prose: number;
   /** Estimated Jev requests (state + question batches). */
   requests: number;
   /** Estimated state tokens. */
@@ -71,22 +78,31 @@ export function planReplay(messages: readonly Message[], options: CompactOptions
   const resolved = resolveOptions(options);
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip);
   const candidates = calls.filter((call) => !call.pinned);
-  if (candidates.length === 0) {
-    return { messages: messages.length, calls: 0, requests: 0, tokens: 0 };
-  }
   try {
     const fitted = fitState(messages, calls, resolved);
+    const prose = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
+    const proseCandidates = prose.filter(
+      (entry) => !isPinned(entry.i, messages.length, resolved.preserveRecentMessages),
+    );
     const batches = batchCalls(candidates, fitted.tokens, resolved);
+    const requests =
+      batches.length +
+      Math.ceil(proseCandidates.length / messageChunkSize(fitted.tokens, resolved.maxRequestTokens));
+    if (candidates.length === 0 && proseCandidates.length === 0) {
+      return { messages: messages.length, calls: 0, prose: 0, requests: 0, tokens: fitted.tokens };
+    }
     return {
       messages: messages.length,
       calls: candidates.length,
-      requests: batches.length,
+      prose: proseCandidates.length,
+      requests,
       tokens: fitted.tokens,
     };
   } catch (error) {
     return {
       messages: messages.length,
       calls: candidates.length,
+      prose: 0,
       requests: 0,
       tokens: 0,
       error: error instanceof Error ? error.message : String(error),
@@ -265,7 +281,7 @@ export async function runReplay(
         index[source.key] = { at: options.now(), error: plan.error };
         summary.errors++;
         onSession?.({ key: source.key, outcome: 'error', detail: plan.error });
-      } else if (plan.calls === 0) {
+      } else if (plan.calls === 0 && plan.prose === 0) {
         index[source.key] = { at: options.now(), records: 0 };
         summary.noCandidates++;
         onSession?.({ key: source.key, outcome: 'no-candidates' });
@@ -292,7 +308,7 @@ export async function runReplay(
           onSession?.({
             key: source.key,
             outcome: 'replayed',
-            detail: `${plan.requests} request(s), ${plan.calls} calls`,
+            detail: `${plan.requests} request(s), ${plan.calls} calls, ${plan.prose} prose`,
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);

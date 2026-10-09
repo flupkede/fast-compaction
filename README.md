@@ -122,7 +122,7 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
-| `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions; schema 2 also judges conversation messages) for local training-data collection; a throwing logger is ignored |
+| `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions; schema 2 also judges conversation messages) for local training-data collection; a throwing logger is ignored. Message judging covers the prose entries that fit the state: on very large histories the late shrink stage leaves the oldest prose out of the state entirely, and those entries are never judged and survive compaction untouched |
 | `strip` | off | Identifier pseudonymisation applied after secret redaction: paths, URLs, e-mails, GUIDs, IPs, domains and a `blocklist` become stable tokens (`[PATH_1]`, `[URL_2]`, …) before anything is sent |
 
 `createTrainingLogger({ dir })` turns that callback into an append-only

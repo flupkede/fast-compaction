@@ -217,9 +217,29 @@ describe('planReplay and replaySession', () => {
 
   it('counts candidates and requests without asking', () => {
     const plan = planReplay(transcript);
-    expect(plan).toMatchObject({ messages: 10, calls: 1, requests: 1 });
+    expect(plan).toMatchObject({ messages: 10, calls: 1, requests: 2 });
     expect(plan.tokens).toBeGreaterThan(0);
     expect(planReplay(transcript.slice(0, 1)).calls).toBe(0);
+  });
+
+  it('plans a pure-chat transcript through the prose path, all-protected as nothing', () => {
+    const chat: Message[] = [
+      { role: 'user', text: 'seed context', toolUses: [] },
+      { role: 'assistant', text: 'old rambling', toolUses: [] },
+      { role: 'user', text: 'latest question', toolUses: [] },
+    ];
+    // 3 messages, preserve 1 → protected: i=0 and i=2; only msg_1 judgeable
+    expect(planReplay(chat, { preserveRecentMessages: 1 })).toMatchObject({
+      calls: 0,
+      prose: 1,
+      requests: 1,
+    });
+    // everything inside the recent window: no request at all
+    expect(planReplay(chat.slice(0, 2))).toMatchObject({
+      calls: 0,
+      prose: 0,
+      requests: 0,
+    });
   });
 
   it('reports an unfittable history as an error instead of throwing', () => {

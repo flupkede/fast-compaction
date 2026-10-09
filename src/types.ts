@@ -109,10 +109,10 @@ export interface CompactOptions {
   truncateHeadChars?: number;
   /**
    * Receives one record whenever Jev was asked (a compaction with no
-   * candidate calls asks nothing and logs nothing): redacted state,
-   * questions, Jev's answers, the applied decisions, for local
-   * training-data collection. A logger that throws is ignored: logging
-   * never breaks compaction.
+   * candidate calls and no judgeable prose asks nothing and logs nothing):
+   * redacted state, questions, Jev's answers, the applied decisions, for
+   * local training-data collection. A logger that throws is ignored:
+   * logging never breaks compaction.
    */
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   /** Tag on the record's `source`; `'live'` unless a replay marks `'replay'`. */
@@ -186,6 +186,8 @@ export interface TrainingRecord {
   keepThreshold: number;
   /** Per-entry noul questions asked about conversation messages (schema 2). */
   messageQuestions?: JevQuestions;
+  /** The raw `msg_<i>` noul answers, keyed like the questions (schema 2). */
+  messageAnswers?: Record<string, number>;
   /** What was applied to the conversation messages (schema 2). */
   messageDecisions?: MessageDecision[];
 }
