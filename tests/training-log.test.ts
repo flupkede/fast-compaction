@@ -75,7 +75,7 @@ describe('compact training log', () => {
     });
     expect(records).toHaveLength(1);
     const record = records[0]!;
-    expect(record.schema).toBe(1);
+    expect(record.schema).toBe(2);
     expect(record.source).toBe('live');
     expect(new Date(record.ts).toString()).not.toBe('Invalid Date');
     expect(record.state.goal).toBe('fix the test');
@@ -85,6 +85,12 @@ describe('compact training log', () => {
     expect(Object.keys(record.questions).sort()).toEqual([
       'call_t1',
       'result_t1',
+    ]);
+    expect(Object.keys(record.messageQuestions ?? {}).sort()).toEqual(['msg_3', 'msg_4']);
+    expect(record.messageDecisions?.map((d) => [d.i, d.reason])).toEqual([
+      [0, 'recent'],
+      [3, 'kept'],
+      [4, 'kept'],
     ]);
     expect(record.answers).toEqual({ t1: { keepCall: 0.9, keepResult: 0.9 } });
     expect(record.decisions).toEqual(result.decisions);
@@ -115,7 +121,7 @@ describe('compact training log', () => {
 
     const withCandidates = { ...options, preserveRecentMessages: 0 };
     const result = await compact(transcript(), fakeJev(), withCandidates);
-    expect(result.stats.requests).toBe(1);
+    expect(result.stats.requests).toBe(2); // one call batch + one message batch
   });
 });
 
@@ -174,7 +180,7 @@ describe('compactSession training wiring', () => {
 
     const on = { ...base, apiKey: 'k', trainingLog: true, trainingDir: dir };
     const { result } = await compactSession(sessionTranscript(), on, fetch);
-    expect(result.stats.requests).toBe(1);
+    expect(result.stats.requests).toBe(2); // call batch + message batch
     const lines = (await readFile(join(dir, `compactions-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).trim().split('\n');
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]!) as TrainingRecord;

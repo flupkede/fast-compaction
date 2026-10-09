@@ -275,7 +275,7 @@ describe('planReplay and replaySession', () => {
       },
     };
     const result = await replaySession(transcript, asker, (record) => void records.push(record));
-    expect(result.stats.requests).toBe(1);
+    expect(result.stats.requests).toBe(2); // call batch + message batch
     expect(records).toHaveLength(1);
     expect(records[0]!.source).toBe('replay');
   });

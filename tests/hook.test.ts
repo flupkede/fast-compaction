@@ -167,11 +167,12 @@ describe('compactSession', () => {
       config,
       jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1), bodies),
     );
-    expect(bodies).toHaveLength(1);
+    expect(bodies).toHaveLength(2); // one call batch + one message batch
     expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
-    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
-    expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\), \d+ ms$/);
+    // msg prose judged droppable (0.1) disappears; seed, the kept tool call and the recent window stay
+    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-6']);
+    expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 2 request\(s\), \d+ ms$/);
     expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
   });
@@ -209,8 +210,8 @@ describe('compactSession', () => {
       return jevFetch(() => 0.9, bodies)(url, init);
     };
     const { result } = await compactSession(transcript(), config, fetch);
-    expect(urls).toEqual(['http://pc:11434/v1/systemone']);
+    expect(urls).toEqual(['http://pc:11434/v1/systemone', 'http://pc:11434/v1/systemone']);
     expect(JSON.parse(bodies[0]!).model).toBe('clef-flash');
-    expect(result.stats.requests).toBe(1);
+    expect(result.stats.requests).toBe(2);
   });
 });

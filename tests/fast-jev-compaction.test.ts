@@ -360,24 +360,105 @@ describe('compact', () => {
       'call_t1',
       'call_t2',
       'call_t3',
+      'msg_3',
+      'msg_8',
       'result_t1',
       'result_t2',
       'result_t3',
     ]);
     expect(new Set(seen.map((r) => JSON.stringify(r.state))).size).toBe(1);
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_result', 'drop_result', 'drop_result']);
-    expect(output.messages).toHaveLength(messages.length);
+    // the prose entries at i=3/i=8 (0.1) lose their prose; they keep nothing
+    // but prose, so they vanish entirely (i=0 is seed-protected)
+    expect(output.messages).toHaveLength(messages.length - 2);
     expect(output.stats).toMatchObject({ resultsDropped: 3, kept: 0, callsDropped: 0, pinned: 0 });
     expect(reductionRatio(output)).toBeGreaterThan(0);
   });
 
-  it('keeps everything without calling Jev when no tool call is a candidate', async () => {
+  it('judges conversation messages and drops the prose of the droppable ones', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      message('user', 'old context nobody needs'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'),
+      result('tool-1', 'file body'),
+      message('assistant', 'working on it'),
+      message('user', 'recent instruction'),
+      message('user', 'latest question'),
+    ];
+    const output = await compact(
+      messages,
+      fakeJev((name) => (name === 'msg_3' ? 0 : 0.9), seen),
+      { preserveRecentMessages: 2 },
+    );
+    // msg questions cover prose entries only, and never the seed/recent window
+    expect(seen.flatMap((r) => r.questions).filter((q) => q.startsWith('msg_')).sort()).toEqual([
+      'msg_3',
+    ]);
+    expect(output.messageDecisions).toEqual([
+      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 3, keep: false, reason: 'dropped' }),
+      expect.objectContaining({ i: 4, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 5, keep: true, reason: 'recent' }),
+    ]);
+    // the dropped assistant note vanishes entirely (prose only); the kept array shifts
+    expect(output.messages).toHaveLength(5);
+    expect(output.messages[0]?.text).toBe('old context nobody needs');
+    expect(output.messages[3]?.text).toBe('recent instruction');
+    expect(output.stats).toMatchObject({ messagesDropped: 1 });
+  });
+
+  it('keeps everything without calling Jev when nothing is judgeable', async () => {
     const seen: Seen[] = [];
     const messages = [message('user', 'hello'), message('assistant', 'hi')];
     const output = await compact(messages, fakeJev(() => 0, seen));
+    // both prose entries sit inside the recent window: protected, never asked
     expect(seen).toHaveLength(0);
-    expect(output.stats).toMatchObject({ requests: 0, stateStage: '', calls: 0 });
+    expect(output.stats).toMatchObject({ requests: 0, calls: 0, messagesDropped: 0 });
     expect(output.messages).toEqual(messages);
+  });
+
+  it('judges pure-chat prose even with no tool calls at all', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      message('user', 'seed context'),
+      message('assistant', 'old rambling nobody needs'),
+      message('user', 'latest question'),
+    ];
+    const output = await compact(
+      messages,
+      fakeJev((name) => (name === 'msg_1' ? 0 : 0.9), seen),
+      { preserveRecentMessages: 1 },
+    );
+    expect(seen.flatMap((r) => r.questions).sort()).toEqual(['msg_1']);
+    expect(output.messageDecisions?.every ?? true).toBeTruthy();
+    expect(output.messages).toHaveLength(2);
+    expect(output.messages[1]?.text).toBe('latest question');
+    expect(output.stats).toMatchObject({ messagesDropped: 1, requests: 1 });
+  });
+
+  it('keeps a message whose answer the judge left out, labeled conservatively', async () => {
+    const messages = [
+      message('user', 'seed context'),
+      message('assistant', 'old rambling nobody needs'),
+      message('user', 'latest question'),
+    ];
+    const output = await compact(messages, {
+      async ask(_state, questions: JevQuestions) {
+        // answer everything except the msg_1 question
+        const answers = Object.fromEntries(
+          Object.keys(questions)
+            .filter((key) => key !== 'msg_1')
+            .map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+        );
+        return { answers };
+      },
+    }, { preserveRecentMessages: 1 });
+    expect(output.messageDecisions).toEqual([
+      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 1, keep: true, reason: 'kept' }),
+      expect.objectContaining({ i: 2, keep: true, reason: 'recent' }),
+    ]);
+    expect(output.messages).toHaveLength(3);
   });
 
   it('reports a tiny reduction when Jev wants everything kept', async () => {

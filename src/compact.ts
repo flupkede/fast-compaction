@@ -8,9 +8,11 @@ import type {
   CompactResult,
   CompactionState,
   FittedState,
+  HistoryEntry,
   JevAsker,
   JevQuestions,
   Message,
+  MessageDecision,
   ResolvedCompactOptions,
   ToolCall,
   ToolUse,
@@ -73,6 +75,16 @@ export function questionsFor(call: ToolCall): JevQuestions {
   };
 }
 
+/** The one `noul` question asked about a conversation-message history entry. */
+export function questionForEntry(entry: HistoryEntry): JevQuestions {
+  return {
+    [`msg_${entry.i}`]: {
+      type: 'noul',
+      instructions: `The ${entry.role} message at history position ${entry.i} should stay in the compacted history: its text still matters for understanding or continuing the work, and later turns still refer to it`,
+    },
+  };
+}
+
 /**
  * Splits the candidate calls into batches whose questions, together with the
  * (always complete) state, fit one request. Each call carries two questions
@@ -107,6 +119,22 @@ export function batchCalls(
   return batches;
 }
 
+/** The empty fitted state used when no request was made. */
+const EMPTY_FITTED: FittedState = {
+  state: { context: '', goal: '', history: [] },
+  tokens: 0,
+  stage: '',
+};
+
+/** Splits a list into fixed-size chunks (last one may be shorter). */
+const MESSAGE_BATCH_QUESTIONS = 48; // 64-question route cap, one question per entry
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
 export function decideCall(
   call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
   answer: CallAnswer,
@@ -121,6 +149,27 @@ export function decideCall(
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
+}
+
+/**
+ * Folds one message judgement into a decision. `undefined` means the entry was
+ * never asked about (protected window) and always stays; `null` means it was
+ * asked about but the judge gave no answer — kept, conservatively.
+ */
+export function decideMessage(
+  entry: Pick<HistoryEntry, 'i' | 'role' | 'text'>,
+  keepProbability: number | null | undefined,
+  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+): MessageDecision {
+  const base = { i: entry.i, role: entry.role, chars: entry.text.length };
+  if (keepProbability === undefined) {
+    return { ...base, keep: true, reason: 'recent' };
+  }
+  if (keepProbability === null) {
+    return { ...base, keep: true, reason: 'kept' };
+  }
+  const keep = keepProbability >= options.keepThreshold;
+  return { ...base, keep, reason: keep ? 'kept' : 'dropped' };
 }
 
 async function askBatch(
@@ -138,6 +187,23 @@ async function askBatch(
         keepResult: noulAnswer(answers, `result_${call.id}`),
       },
     ]),
+  );
+}
+
+/** One noul answer per `msg_<i>` question in the batch. */
+async function askMessageBatch(
+  asker: JevAsker,
+  state: CompactionState,
+  batch: readonly HistoryEntry[],
+): Promise<Map<number, number>> {
+  const questions: JevQuestions = Object.assign({}, ...batch.map(questionForEntry));
+  const { answers } = await asker.ask(state, questions);
+  return new Map(
+    batch.flatMap((entry) => {
+      const answer = answers[`msg_${entry.i}`];
+      const noul = answer && 'noul' in answer && typeof answer.noul === 'number' ? answer.noul : undefined;
+      return noul === undefined ? [] : [[entry.i, noul] as const];
+    }),
   );
 }
 
@@ -160,6 +226,7 @@ export function applyDecisions(
   decisions: readonly CallDecision[],
   calls: readonly ToolCall[],
   headChars: number,
+  messageDecisions: readonly MessageDecision[] = [],
 ): Message[] {
   const byId = new Map(calls.map((call) => [call.id, call]));
   const actions = new Map<string, CallDecision['action']>();
@@ -167,9 +234,15 @@ export function applyDecisions(
     const call = byId.get(decision.id);
     if (call && decision.action !== 'keep') actions.set(call.tool_use_id, decision.action);
   }
+  const droppedMessages = new Map<number, true>(
+    messageDecisions.filter((d) => !d.keep).map((d) => [d.i, true]),
+  );
   const kept: Message[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
+    const proseDropped = droppedMessages.has(index);
+    const text = proseDropped ? '' : message.text;
     const touched =
+      proseDropped ||
       message.toolUses.some((tool) => actions.has(tool.tool_use_id)) ||
       (message.toolResults ?? []).some((result) => actions.has(result.tool_use_id));
     if (!touched) {
@@ -180,17 +253,17 @@ export function applyDecisions(
       .filter((tool) => actions.get(tool.tool_use_id) !== 'drop_call')
       .map((tool) => {
         if (actions.get(tool.tool_use_id) !== 'drop_result') return tool;
-        const text = truncatedResultText(
+        const resultText = truncatedResultText(
           tool.text ?? '',
           tool.isError ?? false,
           headChars,
         );
-        if ((tool.text ?? '') === text) return tool;
+        if ((tool.text ?? '') === resultText) return tool;
         const copy: ToolUse = {
           tool_use_id: tool.tool_use_id,
           tool: tool.tool,
           input: tool.input,
-          text,
+          text: resultText,
         };
         if (tool.isError) copy.isError = true;
         return copy;
@@ -209,6 +282,7 @@ export function applyDecisions(
             };
       });
     if (
+      !proseDropped &&
       !message.toolUses.some(
         (tool) => actions.get(tool.tool_use_id) === 'drop_call',
       ) &&
@@ -223,10 +297,10 @@ export function applyDecisions(
       kept.push(message);
       continue;
     }
-    if (message.text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
+    if (text.trim().length === 0 && toolUses.length === 0 && toolResults.length === 0) {
       continue;
     }
-    const rebuilt: Message = { role: message.role, text: message.text, toolUses };
+    const rebuilt: Message = { role: message.role, text, toolUses };
     if (toolResults.length > 0) rebuilt.toolResults = toolResults;
     kept.push(rebuilt);
   }
@@ -274,42 +348,77 @@ export async function compact(
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
-  let fitted: FittedState = { state: { context: '', goal: '', history: [] }, tokens: 0, stage: '' };
+  let fitted: FittedState | undefined;
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
+  const messageAnswers = new Map<number, number>();
+  let proseEntries: HistoryEntry[] = [];
+  let messageCandidates: HistoryEntry[] = [];
+  const protectedIndex = (i: number): boolean =>
+    // mirrors the tool-call pinning: the seed message and the recent window
+    i === 0 || i >= messages.length - resolved.preserveRecentMessages;
   if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
+    const answeredCall = await Promise.all(
       batches.map((batch) => askBatch(asker, state.state, batch)),
     );
-    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    for (const map of answeredCall) {
+      for (const [id, answer] of map) answers.set(id as string, answer as CallAnswer);
+    }
+  }
+  // prose entries present in the fitted state, outside the protected window
+  if (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0)) {
+    fitted = fitted ?? fitState(messages, calls, resolved);
+    proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
+    messageCandidates = proseEntries.filter((entry) => !protectedIndex(entry.i));
+    const messageChunks = chunk(messageCandidates, MESSAGE_BATCH_QUESTIONS);
+    for (const batch of messageChunks) {
+      const map = await askMessageBatch(asker, fitted.state, batch);
+      for (const [i, noul] of map) messageAnswers.set(i, noul);
+    }
   }
 
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+  );
+  const messageDecisions = proseEntries.map((entry) =>
+    decideMessage(
+      entry,
+      messageCandidates.some((c) => c.i === entry.i)
+        ? (messageAnswers.get(entry.i) ?? null)
+        : undefined,
+      resolved,
+    ),
   );
   const kept = applyDecisions(
     messages,
     decisions,
     calls,
     resolved.truncateHeadChars,
+    messageDecisions,
   );
 
-  if (resolved.trainingLog && candidates.length > 0) {
+  if (resolved.trainingLog && (candidates.length > 0 || messageCandidates.length > 0)) {
     const questions: JevQuestions = Object.assign({}, ...candidates.map(questionsFor));
+    const messageQuestions: JevQuestions = Object.assign(
+      {},
+      ...messageCandidates.map(questionForEntry),
+    );
     const record: TrainingRecord = {
-      schema: 1,
+      schema: 2,
       ts: new Date().toISOString(),
       source: resolved.trainingSource,
-      state: fitted.state,
-      stateTokens: fitted.tokens,
-      stateStage: fitted.stage,
+      state: (fitted ?? EMPTY_FITTED).state,
+      stateTokens: (fitted ?? EMPTY_FITTED).tokens,
+      stateStage: (fitted ?? EMPTY_FITTED).stage,
       questions,
       answers: Object.fromEntries(answers),
       decisions,
       keepThreshold: resolved.keepThreshold,
+      messageQuestions,
+      messageDecisions,
     };
     try {
       await resolved.trainingLog(record);
@@ -321,6 +430,7 @@ export async function compact(
   return {
     messages: kept,
     decisions,
+    messageDecisions,
     stats: {
       messagesBefore: messages.length,
       messagesAfter: kept.length,
@@ -331,9 +441,10 @@ export async function compact(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
-      stateTokens: fitted.tokens,
-      stateStage: fitted.stage,
-      requests: batches.length,
+      messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
+      stateTokens: (fitted ?? EMPTY_FITTED).tokens,
+      stateStage: (fitted ?? EMPTY_FITTED).stage,
+      requests: batches.length + Math.ceil(messageCandidates.length / MESSAGE_BATCH_QUESTIONS),
       ms: Date.now() - started,
     },
   };

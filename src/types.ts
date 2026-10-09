@@ -141,6 +141,7 @@ export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
   decisions: CallDecision[];
+  messageDecisions: MessageDecision[];
   stats: {
     messagesBefore: number;
     messagesAfter: number;
@@ -151,6 +152,8 @@ export interface CompactResult {
     resultsDropped: number;
     callsDropped: number;
     pinned: number;
+    /** Prose entries judged droppable and removed. */
+    messagesDropped: number;
     stateTokens: number;
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;
@@ -164,9 +167,13 @@ export interface CompactResult {
  * (already redacted, fitted) payload Jev saw; `answers` holds the real
  * probabilities asked for the candidate calls only; `decisions` is what was
  * applied (pinned entries carry synthetic 1.0 answers there).
+ *
+ * Schema 2 adds conversation-message judging: `messageQuestions`/`messageDecisions`
+ * cover the prose history entries the model judged alongside the calls. Records
+ * with `schema: 1` predate it and carry call decisions only.
  */
 export interface TrainingRecord {
-  schema: 1;
+  schema: 1 | 2;
   ts: string;
   /** Where the compaction ran: live in a client hook, or replayed from a stored transcript. */
   source: 'live' | 'replay';
@@ -177,6 +184,21 @@ export interface TrainingRecord {
   answers: Record<string, CallAnswer>;
   decisions: CallDecision[];
   keepThreshold: number;
+  /** Per-entry noul questions asked about conversation messages (schema 2). */
+  messageQuestions?: JevQuestions;
+  /** What was applied to the conversation messages (schema 2). */
+  messageDecisions?: MessageDecision[];
+}
+
+/** The judgement applied to one conversation-message prose entry. */
+export interface MessageDecision {
+  /** Message index the history entry was built from (`HistoryEntry.i`). */
+  i: number;
+  role: 'user' | 'assistant';
+  /** Characters of prose the entry carried when judged. */
+  chars: number;
+  keep: boolean;
+  reason: 'kept' | 'dropped' | 'recent';
 }
 
 /** The `state` of a Jev request: a string or any JSON-serialisable object. */
