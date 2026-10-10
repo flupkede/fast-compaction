@@ -27,7 +27,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'fast-jev-transcripts-'));
+  const dir = await mkdtemp(join(tmpdir(), 'fast-compaction-transcripts-'));
   tmpDirs.push(dir);
   return dir;
 }
@@ -603,7 +603,7 @@ describe('buildAsker', () => {
   });
 
   it('passes baseUrl through resolveHookConfig', async () => {
-    const { resolveHookConfig } = await import('../hooks/fast-jev.ts');
+    const { resolveHookConfig } = await import('../hooks/fast-compaction.ts');
     expect(resolveHookConfig({ baseUrl: 'http://pc:11434/v1/systemone' }).baseUrl).toBe(
       'http://pc:11434/v1/systemone',
     );

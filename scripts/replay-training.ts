@@ -42,7 +42,7 @@ const USAGE = `replay-training: turn stored sessions into labelled training reco
 Options:
   --dry-run               count sessions, candidates and requests; ask nothing
   --source <which>        claude | opencode | both (default both)
-  --dir <path>            training dir (default ~/.fast-jev/training)
+  --dir <path>            training dir (default ~/.fast-compaction/training)
   --claude-root <path>    Claude Code projects root (default ~/.claude/projects)
   --opencode-db <path>    OpenCode opencode.db (default ~/.local/share/opencode/opencode.db)
   --limit <n>             replay at most n sessions this run

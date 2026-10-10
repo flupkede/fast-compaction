@@ -6,7 +6,7 @@ import {
   STATS_COMMAND,
   updateSessionStats,
   type StatsStore,
-} from '../hooks/fast-jev.ts';
+} from '../hooks/fast-compaction.ts';
 import { recordCompaction, recordTurn, STORE_PREFIX } from '../hooks/stats.ts';
 
 function memoryStore(initial: Record<string, unknown> = {}): StatsStore & { data: Map<string, unknown> } {

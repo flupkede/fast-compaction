@@ -1,12 +1,12 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fast-compaction",
   "owner": {
     "name": "tamaratran",
     "url": "https://github.com/tamaratran"
   },
   "plugins": [
     {
-      "name": "fast-jev-compaction",
+      "name": "fast-compaction",
       "source": "./",
       "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
       "version": "0.4.1",

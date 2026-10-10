@@ -1,5 +1,5 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fast-compaction",
   "version": "0.4.1",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
@@ -79,7 +79,7 @@
     "trainingDir": {
       "type": "string",
       "title": "Training data directory",
-      "description": "Where trainingLog writes its JSONL files. Defaults to ~/.fast-jev/training.",
+      "description": "Where trainingLog writes its JSONL files. Defaults to ~/.fast-compaction/training.",
       "default": ""
     }
   }

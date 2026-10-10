@@ -3,10 +3,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { TrainingRecord } from './types.js';
 
-export const DEFAULT_TRAINING_DIR = join(homedir(), '.fast-jev', 'training');
+export const DEFAULT_TRAINING_DIR = join(homedir(), '.fast-compaction', 'training');
 
 export interface TrainingLogOptions {
-  /** Defaults to `~/.fast-jev/training`. */
+  /** Defaults to `~/.fast-compaction/training`. */
   dir?: string;
 }
 

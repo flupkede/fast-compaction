@@ -1,4 +1,4 @@
-# fast-jev-compaction
+# fast-compaction
 
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
@@ -71,12 +71,12 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 ## Install and usage
 
 ```sh
-npm install fast-jev-compaction
+npm install fast-compaction
 export TYPESAFE_API_KEY=...
 ```
 
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+import { compactMessages, reductionRatio, type Message } from 'fast-compaction';
 
 const transcript: Message[] = [
   { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
@@ -126,7 +126,7 @@ put it in a source file.
 | `strip` | off | Identifier pseudonymisation applied after secret redaction: paths, URLs, e-mails, GUIDs, IPs, domains and a `blocklist` become stable tokens (`[PATH_1]`, `[URL_2]`, …) before anything is sent |
 
 `createTrainingLogger({ dir })` turns that callback into an append-only
-JSONL writer (`compactions-YYYY-MM.jsonl`, default dir `~/.fast-jev/training`);
+JSONL writer (`compactions-YYYY-MM.jsonl`, default dir `~/.fast-compaction/training`);
 the data stays on the local machine.
 
 ## Replaying stored sessions
@@ -195,7 +195,7 @@ stage was needed, and the number of requests.
 
 ## Claude Code plugin
 
-The repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`
+The repository root is a Claude Code function-hook plugin: `hooks/fast-compaction.ts`
 is a thin adapter that feeds `session.compact` transcripts through `src/` and
 falls back to Claude Code's built-in summary on errors or insufficient
 reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
@@ -215,14 +215,14 @@ either from the shell or as slash commands inside a session:
 
 ```sh
 claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+claude plugin install fast-compaction@fast-compaction
 ```
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
 …); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
-`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
+`fast-compaction: kept N/M messages, no summary (…)` when the pruned history
 replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
 could not remove enough (short sessions, or when it fails).
 

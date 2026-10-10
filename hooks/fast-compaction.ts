@@ -373,7 +373,7 @@ export async function statsCommand(
   const all = await loadAllStats($, now);
   if (arg === 'reset') {
     for (const s of all) await $.store.delete(STORE_PREFIX + s.id);
-    return `fast-jev-compaction stats reset (${all.length} session(s) cleared).`;
+    return `fast-compaction stats reset (${all.length} session(s) cleared).`;
   }
   if (arg === 'session') {
     const own = all.filter((s) => s.id === sessionId);
@@ -448,7 +448,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
     try {
       await $.command.register({
         name: STATS_COMMAND,
-        description: 'fast-jev-compaction token and savings stats',
+        description: 'fast-compaction token and savings stats',
         argumentHint: '[session|reset]',
         immediate: true,
       });

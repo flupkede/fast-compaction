@@ -233,7 +233,7 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
   const avgContext = u.turns > 0 ? formatTokens(sent / u.turns) : 'n/a';
   const fallbacks = c['fallback-low'] + c['fallback-error'];
   const lines = [
-    `fast-jev-compaction: ${scope}, ${sessionCount} session(s) since ${
+    `fast-compaction: ${scope}, ${sessionCount} session(s) since ${
       sessionCount > 0 ? stamp(stats.startedAt) : 'n/a'
     }`,
     `Compactions  ${c.jev} by Jev${c.jev > 0 ? ` · jev avg ${avgMs} ms` : ''} · ${

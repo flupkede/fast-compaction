@@ -1,10 +1,10 @@
-# fast-jev-compaction Claude Code mod
+# fast-compaction Claude Code mod
 
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
-needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
+needed. `hooks/fast-compaction.ts` is a thin adapter: it reads the plugin options,
 finds the TypeSafe key, hands `session.compact` transcripts to the
-`fast-jev-compaction` library in `src/` (the plugin folder is the repository
+`fast-compaction` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
 messages. User and assistant text is never touched. Jev is sent the whole
 conversation as `state` (tool outputs replaced by a one-line note) and, for
@@ -32,7 +32,7 @@ export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 export TYPESAFE_API_KEY="<your TypeSafe key>"
 
 claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+claude plugin install fast-compaction@fast-compaction
 ```
 
 For local development:
@@ -58,7 +58,7 @@ The plugin declares these `userConfig` values in
 | `model` | `jev-latest` |
 | `jevTimeoutMs` | `8000` |
 | `trainingLog` | `false` |
-| `trainingDir` | `~/.fast-jev/training` |
+| `trainingDir` | `~/.fast-compaction/training` |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

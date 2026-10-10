@@ -1,5 +1,5 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fast-compaction",
   "version": "0.2.0",
   "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
   "type": "module",

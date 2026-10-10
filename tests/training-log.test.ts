@@ -11,7 +11,7 @@ import {
   type Message,
   type TrainingRecord,
 } from '../src/index.js';
-import { resolveHookConfig, compactSession } from '../hooks/fast-jev.js';
+import { resolveHookConfig, compactSession } from '../hooks/fast-compaction.js';
 
 function message(role: Message['role'], text: string, extra: Partial<Message> = {}): Message {
   return { role, text, toolUses: [], ...extra };
@@ -60,7 +60,7 @@ afterEach(async () => {
 });
 
 async function tempDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'fast-jev-training-'));
+  const dir = await mkdtemp(join(tmpdir(), 'fast-compaction-training-'));
   dirs.push(dir);
   return dir;
 }
@@ -151,8 +151,8 @@ describe('createTrainingLogger', () => {
     expect(JSON.parse(lines[0]!)).toEqual(record);
   });
 
-  it('defaults the directory to ~/.fast-jev/training', () => {
-    expect(DEFAULT_TRAINING_DIR).toMatch(/\.fast-jev[/\\]training$/);
+  it('defaults the directory to ~/.fast-compaction/training', () => {
+    expect(DEFAULT_TRAINING_DIR).toMatch(/\.fast-compaction[/\\]training$/);
   });
 });
 
