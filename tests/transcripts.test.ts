@@ -643,3 +643,206 @@ describe('fetchWithTimeout', () => {
     expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
   });
 });
+
+describe('segmentByFit', () => {
+  const resolved = {
+    goal: '',
+    keepThreshold: 0.5,
+    preserveRecentMessages: 6,
+    maxStateTokens: 30000,
+    maxRequestTokens: 35000,
+    truncateHeadChars: 300,
+    trainingSource: 'replay' as const,
+  };
+
+  it('keeps a fitting history in one window', async () => {
+    const { segmentByFit } = await import('../src/index.js');
+    const messages: Message[] = [
+      { role: 'user', text: 'hello world', toolUses: [] } as Message,
+      { role: 'assistant', text: 'hi there', toolUses: [] } as Message,
+    ];
+    expect(segmentByFit(messages, resolved)).toEqual([messages]);
+  });
+
+  it('returns null when even a single message cannot fit', async () => {
+    const { segmentByFit } = await import('../src/index.js');
+    const giant: Message = { role: 'user', text: 'x'.repeat(5000), toolUses: [] } as Message;
+    expect(segmentByFit([giant], { ...resolved, maxStateTokens: 10 })).toBeNull();
+  });
+
+  it('splits an oversized history into fitting windows at user prompts', async () => {
+    const { segmentByFit } = await import('../src/index.js');
+    const big: Message[] = [];
+    for (let i = 0; i < 20; i++) {
+      big.push({
+        role: i % 3 === 0 ? 'user' : 'assistant',
+        text: i % 3 === 0 ? `prompt ${i}` : 'y'.repeat(700),
+        toolUses: [],
+      } as Message);
+    }
+    const segments = segmentByFit(big, { ...resolved, maxStateTokens: 600, preserveRecentMessages: 6 });
+    expect(segments).not.toBeNull();
+    expect(segments!.length).toBeGreaterThan(1);
+    expect(segments!.flat()).toEqual(big); // lossless, ordered
+    for (const segment of segments!.slice(1)) {
+      // every later window begins at one of the user's prompts
+      expect(segment[0]!.role).toBe('user');
+    }
+  });
+});
+
+describe('segmented replay of oversized sessions', () => {
+  function localAsker(): JevAsker {
+    return {
+      async ask(_state, questions: JevQuestions) {
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+        };
+      },
+    };
+  }
+
+  function localDeps(dir: string) {
+    return { dir, delayMs: 0, sleep: async () => {}, now: () => 1234 };
+  }
+
+  it('replays a too-large session in windows and ledgers the segment count', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      big: { at: 1, error: 'history too large for Jev (~900 tokens after truncation, limit 100)' },
+    });
+    const big: Message[] = [];
+    for (let i = 0; i < 40; i++) {
+      big.push({
+        role: i % 3 === 0 ? 'user' : 'assistant',
+        text: i % 3 === 0 ? `prompt ${i}` : 'y'.repeat(400),
+        toolUses: [],
+      } as Message);
+    }
+    const sources: ReplaySourceSpec[] = [{ key: 'big', label: 'big', load: async () => big }];
+    const summary = await runReplay(sources, localAsker(), () => {}, {
+      ...localDeps(dir),
+      segmentOversized: true,
+      compactOptions: { maxStateTokens: 950, preserveRecentMessages: 6 },
+    });
+    expect(summary.replayed).toBe(1);
+    expect(summary.records).toBeGreaterThanOrEqual(1);
+    const index = await loadReplayIndex(dir);
+    expect(index.big?.records).toBe(summary.records);
+    expect(index.big?.error).toBeUndefined();
+  });
+
+  it('leaves other errors ledgered even in segment mode', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      crashed: {
+        at: 1,
+        error: 'Jev request failed (500): {"error":"llama-server process has terminated: exit status 0xc0000005"}',
+      },
+    });
+    const sources: ReplaySourceSpec[] = [
+      {
+        key: 'crashed',
+        label: 'crashed',
+        load: async () => [{ role: 'user', text: 'anything', toolUses: [] } as Message],
+      },
+    ];
+    const summary = await runReplay(sources, localAsker(), () => {}, {
+      ...localDeps(dir),
+      segmentOversized: true,
+    });
+    expect(summary.skippedDone).toBe(1);
+    expect(summary.sessions).toBe(0);
+  });
+});
+
+describe('segmented replay completion', () => {
+  function localAsker(): JevAsker {
+    return {
+      async ask(_state, questions: JevQuestions) {
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+        };
+      },
+    };
+  }
+
+  it('completes a session whose tail segment is a legitimate no-op', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      tail: { at: 1, error: 'history too large for Jev (~5000 tokens after truncation, limit 600)' },
+    });
+    // fat messages force splits; the short tail after the last cut is a no-op window
+    const big: Message[] = [];
+    for (let i = 0; i < 12; i++) {
+      big.push({
+        role: i % 3 === 0 ? 'user' : 'assistant',
+        text: i % 3 === 0 ? `prompt ${i}` : 'z'.repeat(700),
+        toolUses: [],
+      } as Message);
+    }
+    big.push({ role: 'user', text: 'final short question', toolUses: [] } as Message);
+    const sources: ReplaySourceSpec[] = [{ key: 'tail', label: 'tail', load: async () => big }];
+    const summary = await runReplay(sources, localAsker(), () => {}, {
+      dir,
+      delayMs: 0,
+      sleep: async () => {},
+      now: () => 1234,
+      segmentOversized: true,
+      compactOptions: { maxStateTokens: 900, preserveRecentMessages: 6 },
+    });
+    expect(summary.replayed).toBe(1);
+    expect(summary.records).toBeGreaterThanOrEqual(1);
+    const index = await loadReplayIndex(dir);
+    expect(index.tail?.records).toBe(summary.records);
+    expect(index.tail?.error).toBeUndefined();
+  });
+});
+
+describe('segmented replay transient failures', () => {
+  function localDeps(dir: string) {
+    return { dir, delayMs: 0, sleep: async () => {}, now: () => 1234 };
+  }
+
+  it('feeds the breaker on a transient segment failure and stays retriable', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      flaky: { at: 1, error: 'history too large for Jev (~5000 tokens after truncation, limit 600)' },
+    });
+    const big: Message[] = [];
+    for (let i = 0; i < 12; i++) {
+      big.push({
+        role: i % 3 === 0 ? 'user' : 'assistant',
+        text: i % 3 === 0 ? `prompt ${i}` : 'z'.repeat(700),
+        toolUses: [],
+      } as Message);
+    }
+    let asks = 0;
+    const asker: JevAsker = {
+      async ask(_state, questions: JevQuestions) {
+        asks++;
+        // fail the first segment that actually asks (later windows can be no-ops)
+        if (asks === 1) throw new Error('fetch failed: connection reset');
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+        };
+      },
+    };
+    const sources: ReplaySourceSpec[] = [{ key: 'flaky', label: 'flaky', load: async () => big }];
+    const summary = await runReplay(sources, asker, () => {}, {
+      ...localDeps(dir),
+      segmentOversized: true,
+      compactOptions: { maxStateTokens: 700, preserveRecentMessages: 6 },
+    });
+    expect(summary.errors).toBe(1);
+    expect(summary.stoppedAfterFailures).toBe(false);
+    const index = await loadReplayIndex(dir);
+    expect(index.flaky?.error).toMatch(/history too large/); // unchanged: retriable, will re-run
+  });
+});

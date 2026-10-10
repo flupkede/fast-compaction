@@ -7,7 +7,13 @@ import {
   resolveOptions,
 } from './compact.js';
 import { collectToolCalls, fitState, isPinned } from './state.js';
-import type { CompactOptions, CompactResult, JevAsker, Message } from './types.js';
+import type {
+  CompactOptions,
+  CompactResult,
+  JevAsker,
+  Message,
+  ResolvedCompactOptions,
+} from './types.js';
 
 export interface ReplayIndexEntry {
   at: number;
@@ -147,6 +153,8 @@ export interface ReplayArgs {
   model?: string;
   /** Overrides the state token ceiling (default 25000; shrink for small-context models). */
   maxStateTokens?: number;
+  /** Re-attempt sessions ledgered "too large" by splitting them at user prompts. */
+  segment?: boolean;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
@@ -187,6 +195,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     } else if (arg === '--base-url') args.baseUrl = value(arg, argv[++i]);
     else if (arg === '--model') args.model = value(arg, argv[++i]);
     else if (arg === '--max-state-tokens') args.maxStateTokens = number(arg, argv[++i]);
+    else if (arg === '--segment') args.segment = true;
     else throw new Error(`unknown argument "${arg}"`);
   }
   return args;
@@ -210,6 +219,8 @@ export interface ReplayRunOptions {
   now: () => number;
   /** Library options applied to every replayed compaction (e.g. `strip`). */
   compactOptions?: CompactOptions;
+  /** Split sessions ledgered "too large" into fitting windows at user prompts. */
+  segmentOversized?: boolean;
 }
 
 export interface ReplayRunSummary {
@@ -237,8 +248,113 @@ export interface ReplayRunSummary {
   stoppedAfterFailures: boolean;
 }
 
+/**
+ * Deterministic judge failures: a fixed outcome at fixed options, safe to
+ * ledger permanently. The 400 phrase comes from Ollama's systemone route
+ * ("prompt N has X tokens; expected 1–Y (input is never truncated)"), the
+ * 413 from its 64 KiB body cap ("text and schema must not exceed 64 KiB"),
+ * the replay script turns its own client timeout into "Jev request timed
+ * out" when a local model loops forever, and a 500 "llama-server process
+ * has terminated" is the backend segfaulting (observed 0xc0000005) on
+ * specific states. Anything else (network, 5xx, write failures) is
+ * transient and retriable.
+ */
+export function isDeterministicJevError(detail: string): boolean {
+  return (
+    /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
+    /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
+    /Jev request timed out/.test(detail) ||
+    /Jev request failed \(500\): .*llama-server process has terminated/.test(detail)
+  );
+}
+
+/** Observes the record append: a swallowed write failure must stay retriable. */
+function makeObserving(trainingLog: (record: import('./types.js').TrainingRecord) => void | Promise<void>) {
+  let emitted = false;
+  let write: Promise<void> = Promise.resolve();
+  const log: typeof trainingLog = (record) => {
+    emitted = true;
+    write = (async () => {
+      await trainingLog(record);
+    })();
+    return write;
+  };
+  return {
+    log,
+    get emitted() {
+      return emitted;
+    },
+    get write() {
+      return write;
+    },
+  };
+}
+
 /** Jev calls failing back-to-back before the run gives up (likely an outage). */
 const MAX_CONSECUTIVE_FAILURES = 5;
+
+/** True when the ledger entry is an oversized-session error worth segmenting. */
+export function isTooLargeError(entry: Pick<ReplayIndexEntry, 'error'> | undefined): boolean {
+  return !!entry?.error && /history too large for Jev/.test(entry.error);
+}
+
+/** A message that starts one of the user's prompts: the natural cut point. */
+function isUserPrompt(message: Message): boolean {
+  return (
+    message.role === 'user' &&
+    message.text.trim().length > 0 &&
+    !(message.toolResults ?? []).length
+  );
+}
+
+function fitsWindow(
+  messages: readonly Message[],
+  resolved: ResolvedCompactOptions,
+): boolean {
+  try {
+    fitState(messages, collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip), resolved);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Greedy segmentation: the fewest windows that each fit the state ceiling,
+ * growing exponentially then binary-searching the largest fitting window,
+ * with cuts snapped back to the nearest user-prompt start. Returns null when
+ * even a single message cannot fit (unshrinkable oversized content).
+ */
+export function segmentByFit(
+  messages: readonly Message[],
+  resolved: ResolvedCompactOptions,
+): Message[][] | null {
+  const segments: Message[][] = [];
+  let start = 0;
+  while (start < messages.length) {
+    if (!fitsWindow(messages.slice(start, start + 1), resolved)) return null;
+    let hi = messages.length;
+    let lo = start + 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi + 1) / 2);
+      if (fitsWindow(messages.slice(start, mid), resolved)) lo = mid;
+      else hi = mid - 1;
+    }
+    let end = lo;
+    // snap the cut back so the next window starts at one of the user's prompts
+    if (end < messages.length) {
+      for (let c = end; c > start + 1; c--) {
+        if (isUserPrompt(messages[c]!)) {
+          end = c;
+          break;
+        }
+      }
+    }
+    segments.push(messages.slice(start, end));
+    start = end;
+  }
+  return segments;
+}
 
 /**
  * Replays every not-yet-ledgered source through `replaySession`, persisting
@@ -268,7 +384,8 @@ export async function runReplay(
   let consecutiveFailures = 0;
   for (const source of sources) {
     if (options.limit !== undefined && summary.replayed + summary.errors >= options.limit) break;
-    if (index[source.key]) {
+    const prior = index[source.key];
+    if (prior && !(options.segmentOversized && isTooLargeError(prior))) {
       summary.skippedDone++;
       continue;
     }
@@ -277,7 +394,89 @@ export async function runReplay(
     try {
       const messages = await source.load();
       const plan = planReplay(messages, options.compactOptions);
-      if (plan.error) {
+      const oversized = plan.error && isTooLargeError({ error: plan.error });
+      if (oversized && options.segmentOversized) {
+        // greedy windows that fit by construction. Windows smaller than the
+        // recent window judge nothing, so a pass that completes with zero
+        // records falls back to the minimum recent window before being
+        // declared unshrinkable.
+        const resolved = resolveOptions(options.compactOptions);
+        const attempts: ResolvedCompactOptions[] = [resolved];
+        if (resolved.preserveRecentMessages > 1) {
+          attempts.push({ ...resolved, preserveRecentMessages: 1 });
+        }
+        let done: { records: number; segments: number } | null = null;
+        let transientDetail: string | undefined;
+        let errorDetail: string | undefined;
+        for (let a = 0; a < attempts.length && done === null && !transientDetail && !errorDetail; a++) {
+          const attempt = attempts[a]!;
+          const segments = segmentByFit(messages, attempt);
+          if (!segments) continue;
+          const segmentOptions: CompactOptions | undefined =
+            a === 0
+              ? options.compactOptions
+              : { ...(options.compactOptions ?? {}), preserveRecentMessages: 1 };
+          let segmentRecords = 0;
+          let segmentsDone = 0;
+          for (const segment of segments) {
+            const observing = makeObserving(trainingLog);
+            try {
+              await replaySession(segment, asker, observing.log, segmentOptions);
+              await observing.write;
+              if (!observing.emitted) {
+                // a segment entirely inside its own recent window judges
+                // nothing: a legitimate no-op, not a failure
+                const segmentPlan = planReplay(segment, segmentOptions);
+                if (segmentPlan.calls === 0 && segmentPlan.prose === 0) {
+                  segmentsDone++;
+                  continue;
+                }
+                throw new Error('no training record emitted');
+              }
+              segmentRecords++;
+              segmentsDone++;
+            } catch (error) {
+              // a segment failing transiently retries the whole session next
+              // run (and feeds the breaker); a deterministic judge failure
+              // lands in the ledger
+              const detail = error instanceof Error ? error.message : String(error);
+              if (isDeterministicJevError(detail)) {
+                errorDetail = `${detail} (segment ${segmentsDone + 1}/${segments.length})`;
+              } else {
+                transientDetail = detail;
+              }
+              break;
+            }
+          }
+          if (transientDetail === undefined && errorDetail === undefined) {
+            if (segmentsDone === segments.length && segmentRecords > 0) {
+              done = { records: segmentRecords, segments: segments.length };
+            }
+            // a zero-record pass falls through to the next preserve variant
+          }
+        }
+        if (done !== null) {
+          index[source.key] = { at: options.now(), records: done.records };
+          summary.replayed++;
+          summary.records += done.records;
+          consecutiveFailures = 0;
+          onSession?.({
+            key: source.key,
+            outcome: 'replayed',
+            detail: `${done.segments} segment(s), ${done.records} record(s) from an oversized history`,
+          });
+        } else if (transientDetail !== undefined) {
+          ledgered = false;
+          summary.errors++;
+          consecutiveFailures++;
+          onSession?.({ key: source.key, outcome: 'error', detail: transientDetail });
+        } else {
+          const detail = `${errorDetail ?? plan.error} (unshrinkable even at preserve=1)`;
+          index[source.key] = { at: options.now(), error: detail };
+          summary.errors++;
+          onSession?.({ key: source.key, outcome: 'error', detail });
+        }
+      } else if (plan.error) {
         index[source.key] = { at: options.now(), error: plan.error };
         summary.errors++;
         onSession?.({ key: source.key, outcome: 'error', detail: plan.error });
@@ -288,19 +487,11 @@ export async function runReplay(
         consecutiveFailures = 0;
       } else {
         // observe the record append: a swallowed write failure must stay retriable
-        let emitted = false;
-        let write: Promise<void> = Promise.resolve();
-        const observing: typeof trainingLog = (record) => {
-          emitted = true;
-          write = (async () => {
-            await trainingLog(record);
-          })();
-          return write;
-        };
+        const observing = makeObserving(trainingLog);
         try {
-          await replaySession(messages, asker, observing, options.compactOptions);
-          await write;
-          if (!emitted) throw new Error('no training record emitted');
+          await replaySession(messages, asker, observing.log, options.compactOptions);
+          await observing.write;
+          if (!observing.emitted) throw new Error('no training record emitted');
           index[source.key] = { at: options.now(), records: 1 };
           summary.replayed++;
           summary.records++;
@@ -312,23 +503,8 @@ export async function runReplay(
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
-          // deterministic iff the judge rejects the size, visibly fails on it,
-          // or crashes on it: the 400 phrase comes from Ollama's systemone
-          // route ("prompt N has X tokens; expected 1–Y (input is never
-          // truncated)"), the 413 from its 64 KiB body cap ("text and schema
-          // must not exceed 64 KiB"), the replay script turns its own client
-          // timeout into "Jev request timed out" when a local model loops
-          // forever, and a 500 "llama-server process has terminated" is the
-          // backend segfaulting (observed 0xc0000005) on specific states.
-          // All are fixed outcomes at fixed options; anything else (network,
-          // 5xx, write failures) stays retriable.
-          if (
-            /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
-            /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
-            /Jev request timed out/.test(detail) ||
-            /Jev request failed \(500\): .*llama-server process has terminated/.test(detail)
-          ) {
-            // the judge's input ceiling is deterministic at fixed options: ledger like a plan error
+          if (isDeterministicJevError(detail)) {
+            // deterministic at fixed options: ledger like a plan error
             index[source.key] = { at: options.now(), error: detail };
             summary.errors++;
             onSession?.({ key: source.key, outcome: 'error', detail });

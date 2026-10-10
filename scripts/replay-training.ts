@@ -58,6 +58,9 @@ Options:
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
   --max-state-tokens <n>  state token ceiling (default 25000; local models with
                           small context, e.g. tev1:4b, need ~2000)
+  --segment               split sessions ledgered "history too large" into the
+                          fewest possible windows, cut at user prompts, and
+                          replay each window as its own record
 
 Identifier stripping is ON by default: identifiers become stable tokens
 ([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
@@ -213,6 +216,7 @@ async function main(): Promise<void> {
       limit: args.limit,
       delayMs,
       compactOptions,
+      segmentOversized: args.segment === true,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
     },
