@@ -937,6 +937,15 @@ describe('segmented replay of oversized sessions', () => {
     ).toBe(true);
   });
 
+  it('classifies the post-rename "judge" phrasings the same as the old "Jev" ones', async () => {
+    const { isDeterministicJevError, isRetryableLedgerError } = await import('../src/index.js');
+    expect(
+      isDeterministicJevError('judge request failed (413): {"error":"text and schema must not exceed 64 KiB"}'),
+    ).toBe(true);
+    expect(isRetryableLedgerError({ error: 'judge request timed out (no answer within 600s)' })).toBe(true);
+    expect(isRetryableLedgerError({ error: 'history too large for the judge (~100 tokens after truncation, limit 90)' })).toBe(true);
+  });
+
   it('leaves other errors ledgered even in segment mode', async () => {
     const dir = await tempDir();
     await saveReplayIndex(dir, {

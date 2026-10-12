@@ -263,10 +263,11 @@ export interface ReplayRunSummary {
  * retriable. Anything else (network, 5xx, write failures) is transient too.
  */
 export function isDeterministicJevError(detail: string): boolean {
+  // both phrasings: pre-rename ledger entries say "Jev", runtime messages say "judge"
   return (
-    /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
-    /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
-    /Jev request failed \(500\): .*llama-server process has terminated/.test(detail)
+    /(?:Jev|judge) request failed \(400\): .*input is never truncated/.test(detail) ||
+    /(?:Jev|judge) request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
+    /(?:Jev|judge) request failed \(500\): .*llama-server process has terminated/.test(detail)
   );
 }
 
@@ -300,7 +301,7 @@ export function isTooLargeError(entry: Pick<ReplayIndexEntry, 'error'> | undefin
   // server-side caps (64 KiB body, model context) hit mid-run are the same condition as the client-side fitting failure
   return (
     !!entry?.error &&
-    (/history too large for Jev/.test(entry.error) ||
+    (/history too large for (?:Jev|the judge)/.test(entry.error) ||
       /must not exceed 64 KiB/.test(entry.error) ||
       /exceeds the model context/.test(entry.error))
   );
@@ -308,7 +309,7 @@ export function isTooLargeError(entry: Pick<ReplayIndexEntry, 'error'> | undefin
 
 /** True when a ledgered error recovers on a re-run: too large (re-segments) or a timeout (infra-bound). */
 export function isRetryableLedgerError(entry: Pick<ReplayIndexEntry, 'error'> | undefined): boolean {
-  return isTooLargeError(entry) || (!!entry?.error && /Jev request timed out/.test(entry.error));
+  return isTooLargeError(entry) || (!!entry?.error && /(?:Jev|judge) request timed out/.test(entry.error));
 }
 
 /** A message that starts one of the user's prompts: the natural cut point. */
@@ -488,7 +489,7 @@ export async function runReplay(
           consecutiveFailures++;
           onSession?.({ key: source.key, outcome: 'error', detail: transientDetail });
         } else {
-          const detail = `${errorDetail ?? plan.error ?? 'history too large for Jev (live request did not fit)'} (unshrinkable even at preserve=1)`;
+          const detail = `${errorDetail ?? plan.error ?? 'history too large for the judge (live request did not fit)'} (unshrinkable even at preserve=1)`;
           index[source.key] = { at: options.now(), error: detail };
           summary.errors++;
           onSession?.({ key: source.key, outcome: 'error', detail });

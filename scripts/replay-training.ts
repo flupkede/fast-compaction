@@ -119,7 +119,7 @@ export function fetchWithTimeout(timeoutMs: number): typeof fetch {
     return fetch(url, { ...init, signal: controller.signal })
       .catch((error: unknown) => {
         if (controller.signal.aborted) {
-          throw new Error(`Jev request timed out (no answer within ${timeoutMs / 1000}s)`);
+          throw new Error(`judge request timed out (no answer within ${timeoutMs / 1000}s)`);
         }
         throw error;
       })
@@ -244,7 +244,7 @@ async function main(): Promise<void> {
       }
     }
     console.log(
-      `\ndry run: ${sessions} session(s), ${calls} candidate call(s), ~${requests} Jev request(s), ~${tokens} state tokens, ${errors} error(s)${args.noStrip ? '' : ', identifiers stripped'}`,
+      `\ndry run: ${sessions} session(s), ${calls} candidate call(s), ~${requests} judge request(s), ~${tokens} state tokens, ${errors} error(s)${args.noStrip ? '' : ', identifiers stripped'}`,
     );
     console.log(`run without --dry-run to write the records (cloud needs ${TYPESAFE_API_KEY_ENV}).`);
     return;
