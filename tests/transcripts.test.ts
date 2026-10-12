@@ -535,6 +535,8 @@ describe('parseReplayArgs', () => {
       dryRun: true,
       source: 'claude',
       limit: 3,
+      asker: 'ollama',
+      segment: true,
     });
     expect(() => parseReplayArgs(['--nope'])).toThrow(/unknown argument/);
     expect(() => parseReplayArgs(['--source', 'cursor'])).toThrow(/--source/);
@@ -553,6 +555,12 @@ describe('parseReplayArgs', () => {
     });
     expect(parseReplayArgs(['--asker', 'cloud'])).toMatchObject({ asker: 'cloud' });
     expect(() => parseReplayArgs(['--asker', 'chatgpt'])).toThrow(/--asker/);
+  });
+
+  it('parses --no-segment as disabling the default segmentation', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(parseReplayArgs(['--no-segment'])).toMatchObject({ segment: false });
+    expect(parseReplayArgs(['--segment'])).toMatchObject({ segment: true });
   });
 
   it('parses --max-state-tokens and validates the number', async () => {
@@ -591,12 +599,27 @@ describe('buildAsker', () => {
     expect(response.answers.q1).toEqual({ type: 'noul', noul: 0.5 });
   });
 
+  it('defaults to the local ollama judge when no asker flag is given', async () => {
+    posted.length = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ url: String(url), model: (JSON.parse(String(init?.body)) as { model?: string }).model });
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    const buildAsker = await loadBuildAsker();
+    const asker = buildAsker({ dryRun: false, source: 'both' });
+    await asker.ask('state', {
+      q1: { type: 'noul', instructions: 'irrelevant' },
+    });
+    expect(posted[0]!.url).toBe('http://localhost:11434/v1/systemone');
+    expect(posted[0]!.model).toBe('clef-flash');
+  });
+
   it('keeps the cloud path key-gated', async () => {
     const buildAsker = await loadBuildAsker();
     const saved = process.env.TYPESAFE_API_KEY;
     delete process.env.TYPESAFE_API_KEY;
     try {
-      expect(() => buildAsker({ dryRun: false, source: 'both' })).toThrow(/--asker ollama/);
+      expect(() => buildAsker({ dryRun: false, source: 'both', asker: 'cloud' })).toThrow(/--asker ollama/);
     } finally {
       if (saved !== undefined) process.env.TYPESAFE_API_KEY = saved;
     }

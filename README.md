@@ -139,40 +139,44 @@ that asks Jev, using the same redaction as live compaction:
 
 ```sh
 npm run replay -- --dry-run        # count sessions, candidate calls, ~requests
-npm run replay -- --limit 10       # first real batch (needs TYPESAFE_API_KEY)
-npm run replay                     # everything; re-run to resume where it stopped
+npm run replay                     # local Ollama judge by default; re-run to resume
+npm run replay -- --asker cloud    # TypeSafe cloud instead (needs TYPESAFE_API_KEY)
 ```
 
-**Privacy.** Identifier stripping is ON by default for replay
+**Privacy.** The default judge is local Ollama — nothing leaves the machine
+and no API key is needed. Identifier stripping is ON by default for replay
 (`--no-strip` disables): after secret redaction, paths, URLs, e-mails, GUIDs,
 IPs, domains and any `--blocklist <file>` terms (one per line, `#` comments)
 are replaced by stable tokens, so client names and repository layouts never
-reach the API. TypeSafe's privacy policy states they "will not train or fine
-tune any artificial intelligence or machine learning models on Input" and will
-not disclose it beyond service providers, but retention is open-ended and
-US-hosted — stripping is the client-side control, and the only fully safe
-option is not sending data at all.
+reach the API when you opt into `--asker cloud`. TypeSafe's privacy policy
+states they "will not train or fine tune any artificial intelligence or
+machine learning models on Input" and will not disclose it beyond service
+providers, but retention is open-ended and US-hosted — stripping is the
+client-side control, and the only fully safe option is not sending data at
+all.
 
 ## Local judge (Ollama)
 
-Any System One-compatible endpoint can be the judge — including a local
-Ollama decision model (e.g. Cloudflare's `clef-flash`), in which case nothing
-ever leaves your machine and no API key is needed:
+The judge defaults to a local Ollama decision model (e.g. Cloudflare's
+`clef-flash`), so nothing ever leaves your machine and no API key is needed:
 
 ```sh
 ollama pull clef-flash            # needs Ollama >= 0.35.1
-npm run replay -- --asker ollama --base-url http://pc:11434/v1/systemone
+npm run replay                     # judges locally by default
 ```
 
-The hook takes the same choice through its `baseUrl` plugin option (plus
-`model: clef-flash` and a raised `jevTimeoutMs` — local inference is slower
-than the cloud API and the hook falls back to the built-in summary on
-timeout). The library layer is unchanged: `new JevClient({ baseUrl, apiKey:
-'ollama', model })`.
+Remote endpoints take over via `--asker cloud` (plus `--base-url` /
+`--model` for other System One-compatible servers). The hook takes the same
+choice through its `baseUrl` plugin option (plus `model: clef-flash` and a
+raised `jevTimeoutMs` — local inference is slower than the cloud API and the
+hook falls back to the built-in summary on timeout). The library layer is
+unchanged: `new JevClient({ baseUrl, apiKey: 'ollama', model })`.
 
 Progress is ledgered in `replay-index.json` inside the training dir, so an
 interrupted run continues instead of duplicating records; sessions that failed
-against the API stay unledgered and retry. `--source claude|opencode|both`,
+against the judge stay unledgered and retry. Sessions ledgered "history too
+large" are split into fitting windows at user prompts and replayed per window
+by default; `--no-segment` disables that. `--source claude|opencode|both`,
 `--delay-ms` (default 500 between sessions), `--dir`, `--claude-root`,
 `--opencode-db` and `--min-messages` tune the sweep. Reading OpenCode needs
 Node >= 22.5 (`node:sqlite`). Replay labels are Jev judging a session's end

@@ -145,7 +145,7 @@ export interface ReplayArgs {
   noStrip?: boolean;
   /** File with blocklist terms, one per line. */
   blocklistPath?: string;
-  /** `ollama` targets a local Ollama decision model; default `cloud` needs an API key. */
+  /** `ollama` (default) targets a local Ollama decision model — nothing leaves the machine; `cloud` is opt-in and needs an API key. */
   asker?: 'cloud' | 'ollama';
   /** Full System One endpoint for `--asker ollama`. */
   baseUrl?: string;
@@ -153,13 +153,13 @@ export interface ReplayArgs {
   model?: string;
   /** Overrides the state token ceiling (default 25000; shrink for small-context models). */
   maxStateTokens?: number;
-  /** Re-attempt sessions ledgered "too large" by splitting them at user prompts. */
+  /** Re-attempt sessions ledgered "too large" by splitting them at user prompts (default on; `--no-segment` disables). */
   segment?: boolean;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
 export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
-  const args: ReplayArgs = { dryRun: false, source: 'both' };
+  const args: ReplayArgs = { dryRun: false, source: 'both', asker: 'ollama', segment: true };
   const value = (flag: string, arg: string | undefined): string => {
     if (arg === undefined || arg.startsWith('--')) throw new Error(`${flag} needs a value`);
     return arg;
@@ -195,6 +195,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     } else if (arg === '--base-url') args.baseUrl = value(arg, argv[++i]);
     else if (arg === '--model') args.model = value(arg, argv[++i]);
     else if (arg === '--max-state-tokens') args.maxStateTokens = number(arg, argv[++i]);
+    else if (arg === '--no-segment') args.segment = false;
     else if (arg === '--segment') args.segment = true;
     else throw new Error(`unknown argument "${arg}"`);
   }

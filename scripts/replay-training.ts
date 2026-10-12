@@ -51,22 +51,23 @@ Options:
   --no-strip              disable identifier pseudonymisation (paths, URLs,
                           e-mails, GUIDs, IPs, domains, blocklist)
   --blocklist <path>      file with extra terms (client names), one per line
-  --asker <which>         cloud (TypeSafe, needs ${TYPESAFE_API_KEY_ENV}) or
-                          ollama (local decision model, e.g. clef-flash)
+  --asker <which>         ollama (local decision model, e.g. clef-flash;
+                          default) or cloud (TypeSafe, needs
+                          ${TYPESAFE_API_KEY_ENV})
   --base-url <url>        full System One endpoint for --asker ollama
                           (default ${OLLAMA_SYSTEM_ONE_URL})
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
   --max-state-tokens <n>  state token ceiling (default 25000; local models with
                           small context, e.g. tev1:4b, need ~2000)
-  --segment               split sessions ledgered "history too large" into the
-                          fewest possible windows, cut at user prompts, and
-                          replay each window as its own record
+  --no-segment            disable the default splitting of sessions ledgered
+                          "history too large" into the fewest possible windows,
+                          cut at user prompts, replayed as their own records
 
 Identifier stripping is ON by default: identifiers become stable tokens
 ([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
-With --asker ollama nothing leaves this machine at all. Reading OpenCode
-requires Node >= 22.5. Re-run to resume: finished sessions are ledgered in
-<dir>/replay-index.json.
+The judge defaults to local Ollama: nothing leaves this machine and no API
+key is needed. Reading OpenCode requires Node >= 22.5. Re-run to resume:
+finished sessions are ledgered in <dir>/replay-index.json.
 `;
 
 async function claudeSources(root: string): Promise<ReplaySourceSpec[]> {
@@ -111,20 +112,20 @@ export function fetchWithTimeout(timeoutMs: number): typeof fetch {
   };
 }
 
-/** Picks the judge from the parsed flags: local Ollama, or the TypeSafe cloud. */
+/** Picks the judge from the parsed flags: local Ollama by default, or the TypeSafe cloud. */
 export function buildAsker(args: ReplayArgs): JevAsker {
-  if (args.asker === 'ollama') {
-    return new JevClient({
-      baseUrl: args.baseUrl ?? OLLAMA_SYSTEM_ONE_URL,
-      apiKey: 'ollama',
-      model: args.model ?? OLLAMA_MODEL,
-      fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
-    });
+  if (args.asker === 'cloud') {
+    if (!process.env[TYPESAFE_API_KEY_ENV]) {
+      throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured for --asker cloud (--asker ollama is the local default)`);
+    }
+    return new JevClient();
   }
-  if (!process.env[TYPESAFE_API_KEY_ENV]) {
-    throw new Error(`${TYPESAFE_API_KEY_ENV} is not configured (or use --asker ollama)`);
-  }
-  return new JevClient();
+  return new JevClient({
+    baseUrl: args.baseUrl ?? OLLAMA_SYSTEM_ONE_URL,
+    apiKey: 'ollama',
+    model: args.model ?? OLLAMA_MODEL,
+    fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
+  });
 }
 
 /** Builds compactOptions from the parsed flags: token ceiling + identifier stripping. */
@@ -216,7 +217,7 @@ async function main(): Promise<void> {
       limit: args.limit,
       delayMs,
       compactOptions,
-      segmentOversized: args.segment === true,
+      segmentOversized: args.segment !== false,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: () => Date.now(),
     },
