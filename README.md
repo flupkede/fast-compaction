@@ -168,6 +168,9 @@ npm run replay                     # judges locally by default
 Local runs default to a 12000-token state ceiling because the endpoint caps
 requests at 64 KiB; override with `--max-state-tokens`.
 
+Set `OLLAMA_SYSTEM_ONE_URL` (and optionally `OLLAMA_MODEL`) to persist a LAN
+endpoint without retyping the flags; the flags still override.
+
 Remote endpoints take over via `--asker cloud` (plus `--base-url` /
 `--model` for other System One-compatible servers). The hook takes the same
 choice through its `baseUrl` plugin option (plus `model: clef-flash` and a

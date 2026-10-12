@@ -57,6 +57,8 @@ Options:
   --base-url <url>        full System One endpoint for --asker ollama
                           (default ${OLLAMA_SYSTEM_ONE_URL})
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
+                          OLLAMA_SYSTEM_ONE_URL / OLLAMA_MODEL env vars persist
+                          a LAN endpoint and model; flags still win
   --max-state-tokens <n>  state token ceiling (local default 12000 — the
                           endpoint caps requests at 64 KiB; cloud default
                           25000; small-context models, e.g. tev1:4b, need
@@ -122,10 +124,11 @@ export function buildAsker(args: ReplayArgs): JevAsker {
     }
     return new JevClient();
   }
+  // --base-url / --model flag > OLLAMA_* env var > built-in default
   return new JevClient({
-    baseUrl: args.baseUrl ?? OLLAMA_SYSTEM_ONE_URL,
+    baseUrl: args.baseUrl ?? process.env.OLLAMA_SYSTEM_ONE_URL ?? OLLAMA_SYSTEM_ONE_URL,
     apiKey: 'ollama',
-    model: args.model ?? OLLAMA_MODEL,
+    model: args.model ?? process.env.OLLAMA_MODEL ?? OLLAMA_MODEL,
     fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
   });
 }

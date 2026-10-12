@@ -615,6 +615,69 @@ describe('buildAsker', () => {
     expect(posted[0]!.model).toBe('clef-flash');
   });
 
+  it('takes the endpoint from OLLAMA_SYSTEM_ONE_URL when no flag is given', async () => {
+    posted.length = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ url: String(url), model: (JSON.parse(String(init?.body)) as { model?: string }).model });
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    const savedUrl = process.env.OLLAMA_SYSTEM_ONE_URL;
+    process.env.OLLAMA_SYSTEM_ONE_URL = 'http://ollama.example:11434/v1/systemone';
+    try {
+      const buildAsker = await loadBuildAsker();
+      const asker = buildAsker({ dryRun: false, source: 'both', asker: 'ollama' });
+      await asker.ask('state', {
+        q1: { type: 'noul', instructions: 'irrelevant' },
+      });
+      expect(posted[0]!.url).toBe('http://ollama.example:11434/v1/systemone');
+    } finally {
+      if (savedUrl === undefined) delete process.env.OLLAMA_SYSTEM_ONE_URL;
+      else process.env.OLLAMA_SYSTEM_ONE_URL = savedUrl;
+    }
+  });
+
+  it('lets the --base-url flag beat OLLAMA_SYSTEM_ONE_URL', async () => {
+    posted.length = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ url: String(url), model: (JSON.parse(String(init?.body)) as { model?: string }).model });
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    const savedUrl = process.env.OLLAMA_SYSTEM_ONE_URL;
+    process.env.OLLAMA_SYSTEM_ONE_URL = 'http://env-lan:11434/v1/systemone';
+    try {
+      const buildAsker = await loadBuildAsker();
+      const asker = buildAsker({ dryRun: false, source: 'both', asker: 'ollama', baseUrl: 'http://flag-lan:11434/v1/systemone' });
+      await asker.ask('state', {
+        q1: { type: 'noul', instructions: 'irrelevant' },
+      });
+      expect(posted[0]!.url).toBe('http://flag-lan:11434/v1/systemone');
+    } finally {
+      if (savedUrl === undefined) delete process.env.OLLAMA_SYSTEM_ONE_URL;
+      else process.env.OLLAMA_SYSTEM_ONE_URL = savedUrl;
+    }
+  });
+
+  it('takes the model from OLLAMA_MODEL when no flag is given', async () => {
+    posted.length = 0;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      posted.push({ url: String(url), model: (JSON.parse(String(init?.body)) as { model?: string }).model });
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    const savedModel = process.env.OLLAMA_MODEL;
+    process.env.OLLAMA_MODEL = 'clef-flash-lan';
+    try {
+      const buildAsker = await loadBuildAsker();
+      const asker = buildAsker({ dryRun: false, source: 'both', asker: 'ollama' });
+      await asker.ask('state', {
+        q1: { type: 'noul', instructions: 'irrelevant' },
+      });
+      expect(posted[0]!.model).toBe('clef-flash-lan');
+    } finally {
+      if (savedModel === undefined) delete process.env.OLLAMA_MODEL;
+      else process.env.OLLAMA_MODEL = savedModel;
+    }
+  });
+
   it('keeps the cloud path key-gated', async () => {
     const buildAsker = await loadBuildAsker();
     const saved = process.env.TYPESAFE_API_KEY;
