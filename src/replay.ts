@@ -351,10 +351,13 @@ export function segmentByFit(
       else hi = mid - 1;
     }
     let end = lo;
-    // snap the cut back so the next window starts at one of the user's prompts
+    // snap the cut back so the next window starts at one of the user's prompts.
+    // fitState is not monotonic under prefixes — a shorter window can carry a
+    // fatter pinned tail — so the snapped window must still fit before the cut
+    // is accepted; otherwise the cut falls back to the verified search end.
     if (end < messages.length) {
       for (let c = end; c > start + 1; c--) {
-        if (isUserPrompt(messages[c]!)) {
+        if (isUserPrompt(messages[c]!) && fitsWindow(messages.slice(start, c), resolved)) {
           end = c;
           break;
         }

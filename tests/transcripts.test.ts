@@ -822,6 +822,37 @@ describe('segmentByFit', () => {
       expect(segment[0]!.role).toBe('user');
     }
   });
+
+  it('never snaps a cut to a user prompt whose shorter window no longer fits', async () => {
+    const { segmentByFit } = await import('../src/index.js');
+    const small = (): Message => ({ role: 'assistant', text: 'x'.repeat(30), toolUses: [] }) as Message;
+    const fat = (): Message => ({ role: 'assistant', text: 'F'.repeat(1200), toolUses: [] }) as Message;
+    const prompt = (t: string): Message => ({ role: 'user', text: t, toolUses: [] }) as Message;
+    // fitState is not monotonic under prefixes: in the SHORT prompt-cut window
+    // the fat message sits in the pinned tail (text abridged to ~550 chars),
+    // while in the LARGER binary-search window it is old (collapsed to ~25
+    // chars) — so the naive snap produces a SHORTER window with a BIGGER state
+    const messages: Message[] = [
+      small(), small(), prompt('p0'), small(), small(), small(),
+      fat(), small(), small(), small(),
+      prompt('cut'), small(), small(), small(), small(),
+      fat(), small(), small(), small(), small(), small(), small(), small(), small(),
+    ];
+    // calibrate the ceiling from the real token count of the trapped window
+    const trap = planReplay(messages.slice(0, 10), { maxStateTokens: 100, preserveRecentMessages: 6 });
+    expect(trap.error).toMatch(/~(\d+) tokens/);
+    const ceiling = Number(/~(\d+) tokens/.exec(trap.error!)![1]) - 10;
+    const segments = segmentByFit(messages, { ...resolved, maxStateTokens: ceiling });
+    expect(segments).not.toBeNull();
+    expect(segments!.length).toBeGreaterThan(1);
+    expect(segments!.flat()).toEqual(messages); // lossless, ordered
+    for (const segment of segments!) {
+      // every window fits by construction — the snap-back cannot break that
+      expect(
+        planReplay(segment, { maxStateTokens: ceiling, preserveRecentMessages: 6 }).error,
+      ).toBeUndefined();
+    }
+  });
 });
 
 describe('segmented replay of oversized sessions', () => {
