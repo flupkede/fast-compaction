@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  isRetryableLedgerError,
   isTooLargeError,
   listClaudeTranscriptFiles,
   loadClaudeTranscript,
@@ -489,7 +490,8 @@ describe('runReplay', () => {
     const index = await loadReplayIndex(dir);
     expect(index.sized?.error).toMatch(/input is never truncated/);
     expect(index.huge?.error).toMatch(/64 KiB/);
-    expect(index.flaky?.error).toMatch(/timed out/);
+    // timeouts are infra-bound: unledgered, retried next run
+    expect(index.flaky).toBeUndefined();
     expect(index.crashy?.error).toMatch(/llama-server/);
     expect(index.ok?.records).toBe(1);
   });
@@ -711,13 +713,13 @@ describe('buildCompactOptions', () => {
       strip: {},
     });
     // no asker means local, so the local ceiling applies even with --no-strip
-    expect(buildCompactOptions({ noStrip: true }, [])).toEqual({ maxStateTokens: 12000 });
+    expect(buildCompactOptions({ noStrip: true }, [])).toEqual({ maxStateTokens: 8000 });
   });
 
-  it('defaults the local asker to 12000 state tokens; explicit flag and cloud do not', async () => {
+  it('defaults the local asker to 8000 state tokens; explicit flag and cloud do not', async () => {
     const { buildCompactOptions } = await import('../scripts/replay-training.ts');
-    expect(buildCompactOptions({}, [])).toEqual({ maxStateTokens: 12000, strip: {} });
-    expect(buildCompactOptions({ asker: 'ollama' }, [])).toEqual({ maxStateTokens: 12000, strip: {} });
+    expect(buildCompactOptions({}, [])).toEqual({ maxStateTokens: 8000, strip: {} });
+    expect(buildCompactOptions({ asker: 'ollama' }, [])).toEqual({ maxStateTokens: 8000, strip: {} });
     expect(buildCompactOptions({ asker: 'cloud' }, [])).toEqual({ strip: {} });
     expect(buildCompactOptions({ maxStateTokens: 500, asker: 'ollama' }, [])).toEqual({
       maxStateTokens: 500,
@@ -841,6 +843,15 @@ describe('segmented replay of oversized sessions', () => {
     ).toBe(true);
   });
 
+  it('treats a ledgered 400 context rejection as too large, so segmentation retries it', () => {
+    expect(
+      isTooLargeError({
+        error:
+          'Jev request failed (400): {"error":"decision prompt exceeds the model context (input is never truncated)"}',
+      }),
+    ).toBe(true);
+  });
+
   it('leaves other errors ledgered even in segment mode', async () => {
     const dir = await tempDir();
     await saveReplayIndex(dir, {
@@ -862,6 +873,27 @@ describe('segmented replay of oversized sessions', () => {
     });
     expect(summary.skippedDone).toBe(1);
     expect(summary.sessions).toBe(0);
+  });
+
+  it('retries a ledgered timeout entry in segment mode (infra-bound, not session-bound)', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      slow: { at: 1, error: 'Jev request timed out (no answer within 240s)' },
+    });
+    const sources: ReplaySourceSpec[] = [
+      {
+        key: 'slow',
+        label: 'slow',
+        load: async () => [{ role: 'user', text: 'anything', toolUses: [] } as Message],
+      },
+    ];
+    const summary = await runReplay(sources, localAsker(), () => {}, {
+      ...localDeps(dir),
+      segmentOversized: true,
+    });
+    expect(summary.skippedDone).toBe(0);
+    const index = await loadReplayIndex(dir);
+    expect(index.slow?.error).toBeUndefined();
   });
 });
 

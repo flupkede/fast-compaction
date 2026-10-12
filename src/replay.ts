@@ -254,17 +254,15 @@ export interface ReplayRunSummary {
  * ledger permanently. The 400 phrase comes from Ollama's systemone route
  * ("prompt N has X tokens; expected 1–Y (input is never truncated)"), the
  * 413 from its 64 KiB body cap ("text and schema must not exceed 64 KiB"),
- * the replay script turns its own client timeout into "Jev request timed
- * out" when a local model loops forever, and a 500 "llama-server process
- * has terminated" is the backend segfaulting (observed 0xc0000005) on
- * specific states. Anything else (network, 5xx, write failures) is
- * transient and retriable.
+ * and a 500 "llama-server process has terminated" is the backend
+ * segfaulting (observed 0xc0000005) on specific states. Timeouts are
+ * infra-bound (a slow GPU), not session-bound, so they stay transient and
+ * retriable. Anything else (network, 5xx, write failures) is transient too.
  */
 export function isDeterministicJevError(detail: string): boolean {
   return (
     /Jev request failed \(400\): .*input is never truncated/.test(detail) ||
     /Jev request failed \(413\): .*must not exceed 64 KiB/.test(detail) ||
-    /Jev request timed out/.test(detail) ||
     /Jev request failed \(500\): .*llama-server process has terminated/.test(detail)
   );
 }
@@ -296,11 +294,18 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 
 /** True when the ledger entry is an oversized-session error worth segmenting. */
 export function isTooLargeError(entry: Pick<ReplayIndexEntry, 'error'> | undefined): boolean {
-  // a server-side 64 KiB cap hit mid-run is the same condition as the client-side fitting failure, so segmentation retries it
+  // server-side caps (64 KiB body, model context) hit mid-run are the same condition as the client-side fitting failure
   return (
     !!entry?.error &&
-    (/history too large for Jev/.test(entry.error) || /must not exceed 64 KiB/.test(entry.error))
+    (/history too large for Jev/.test(entry.error) ||
+      /must not exceed 64 KiB/.test(entry.error) ||
+      /exceeds the model context/.test(entry.error))
   );
+}
+
+/** True when a ledgered error recovers on a re-run: too large (re-segments) or a timeout (infra-bound). */
+export function isRetryableLedgerError(entry: Pick<ReplayIndexEntry, 'error'> | undefined): boolean {
+  return isTooLargeError(entry) || (!!entry?.error && /Jev request timed out/.test(entry.error));
 }
 
 /** A message that starts one of the user's prompts: the natural cut point. */
@@ -390,7 +395,7 @@ export async function runReplay(
   for (const source of sources) {
     if (options.limit !== undefined && summary.replayed + summary.errors >= options.limit) break;
     const prior = index[source.key];
-    if (prior && !(options.segmentOversized && isTooLargeError(prior))) {
+    if (prior && !(options.segmentOversized && isRetryableLedgerError(prior))) {
       summary.skippedDone++;
       continue;
     }

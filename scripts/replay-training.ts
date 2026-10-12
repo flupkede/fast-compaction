@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   createTrainingLogger,
+  DEFAULT_MODEL,
   DEFAULT_TRAINING_DIR,
   JevClient,
   listClaudeTranscriptFiles,
@@ -19,6 +20,7 @@ import {
   parseReplayArgs,
   planReplay,
   runReplay,
+  SYSTEM_ONE_URL,
   TYPESAFE_API_KEY_ENV,
   type CompactOptions,
   type JevAsker,
@@ -59,10 +61,11 @@ Options:
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
                           OLLAMA_SYSTEM_ONE_URL / OLLAMA_MODEL env vars persist
                           a LAN endpoint and model; flags still win
-  --max-state-tokens <n>  state token ceiling (local default 12000 — the
-                          endpoint caps requests at 64 KiB; cloud default
-                          25000; small-context models, e.g. tev1:4b, need
-                          ~2000)
+  --max-state-tokens <n>  state token ceiling (local default 8000 — the
+                          decision prompt must fit a typical local num_ctx
+                          of 16384 and the endpoint's 64 KiB request cap;
+                          cloud default 25000; small-context models, e.g.
+                          tev1:4b, need ~2000)
   --no-segment            disable the default splitting of sessions ledgered
                           "history too large" into the fewest possible windows,
                           cut at user prompts, replayed as their own records
@@ -116,6 +119,15 @@ export function fetchWithTimeout(timeoutMs: number): typeof fetch {
   };
 }
 
+/** Resolves the local judge once; buildAsker and the run banner share it so they cannot drift. */
+export function resolveLocalJudge(args: Pick<ReplayArgs, 'baseUrl' | 'model'>): { baseUrl: string; model: string } {
+  // --base-url / --model flag > OLLAMA_* env var > built-in default
+  return {
+    baseUrl: args.baseUrl ?? process.env.OLLAMA_SYSTEM_ONE_URL ?? OLLAMA_SYSTEM_ONE_URL,
+    model: args.model ?? process.env.OLLAMA_MODEL ?? OLLAMA_MODEL,
+  };
+}
+
 /** Picks the judge from the parsed flags: local Ollama by default, or the TypeSafe cloud. */
 export function buildAsker(args: ReplayArgs): JevAsker {
   if (args.asker === 'cloud') {
@@ -124,17 +136,21 @@ export function buildAsker(args: ReplayArgs): JevAsker {
     }
     return new JevClient();
   }
-  // --base-url / --model flag > OLLAMA_* env var > built-in default
+  const judge = resolveLocalJudge(args);
   return new JevClient({
-    baseUrl: args.baseUrl ?? process.env.OLLAMA_SYSTEM_ONE_URL ?? OLLAMA_SYSTEM_ONE_URL,
+    baseUrl: judge.baseUrl,
     apiKey: 'ollama',
-    model: args.model ?? process.env.OLLAMA_MODEL ?? OLLAMA_MODEL,
+    model: judge.model,
     fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
   });
 }
 
-/** The Ollama System One endpoint rejects requests over 64 KiB; 12000 estimated tokens leaves room for the question schema under that cap. */
-export const LOCAL_MAX_STATE_TOKENS = 12000;
+/**
+ * Local judges typically run num_ctx 16384 and the endpoint rejects bodies
+ * over 64 KiB; the decision prompt (state + instructions + schema) must fit
+ * both, and the estimate runs 2-18% under real token usage.
+ */
+export const LOCAL_MAX_STATE_TOKENS = 8000;
 
 /** Builds compactOptions from the parsed flags: token ceiling + identifier stripping. */
 export function buildCompactOptions(
@@ -170,6 +186,13 @@ async function main(): Promise<void> {
           .filter((line) => line.length > 0 && !line.startsWith('#'))
       : [];
   const compactOptions = buildCompactOptions(args, blocklist);
+  // one line naming the judge this run will actually use (flag > env > default)
+  if (args.asker === 'cloud') {
+    console.log(`judge: ${DEFAULT_MODEL} @ ${SYSTEM_ONE_URL} (cloud)`);
+  } else {
+    const judge = resolveLocalJudge(args);
+    console.log(`judge: ${judge.model} @ ${judge.baseUrl} (local)`);
+  }
   const sources: ReplaySourceSpec[] = [];
   if (args.source !== 'opencode') {
     const claude = await claudeSources(args.claudeRoot ?? DEFAULTS.claudeRoot);

@@ -165,8 +165,11 @@ ollama pull clef-flash            # needs Ollama >= 0.35.1
 npm run replay                     # judges locally by default
 ```
 
-Local runs default to a 12000-token state ceiling because the endpoint caps
-requests at 64 KiB; override with `--max-state-tokens`.
+Local runs default to an 8000-token state ceiling: the decision prompt
+(state + instructions + schema) must fit a typical local judge `num_ctx` of
+16384 and the endpoint's 64 KiB request cap; override with
+`--max-state-tokens`. Timed-out sessions are infra-bound, not session-bound:
+they retry on the next run instead of being retired.
 
 Set `OLLAMA_SYSTEM_ONE_URL` (and optionally `OLLAMA_MODEL`) to persist a LAN
 endpoint without retyping the flags; the flags still override.
