@@ -404,7 +404,8 @@ export async function runReplay(
     try {
       const messages = await source.load();
       const plan = planReplay(messages, options.compactOptions);
-      const oversized = plan.error && isTooLargeError({ error: plan.error });
+      // a prior too-large ledger entry (including a live fit failure) segments even when the plan fits
+      const oversized = isTooLargeError({ error: plan.error }) || isTooLargeError(prior);
       if (oversized && options.segmentOversized) {
         // greedy windows that fit by construction. Windows smaller than the
         // recent window judge nothing, so a pass that completes with zero
@@ -481,7 +482,7 @@ export async function runReplay(
           consecutiveFailures++;
           onSession?.({ key: source.key, outcome: 'error', detail: transientDetail });
         } else {
-          const detail = `${errorDetail ?? plan.error} (unshrinkable even at preserve=1)`;
+          const detail = `${errorDetail ?? plan.error ?? 'history too large for Jev (live request did not fit)'} (unshrinkable even at preserve=1)`;
           index[source.key] = { at: options.now(), error: detail };
           summary.errors++;
           onSession?.({ key: source.key, outcome: 'error', detail });
@@ -515,6 +516,11 @@ export async function runReplay(
           const detail = error instanceof Error ? error.message : String(error);
           if (isDeterministicJevError(detail)) {
             // deterministic at fixed options: ledger like a plan error
+            index[source.key] = { at: options.now(), error: detail };
+            summary.errors++;
+            onSession?.({ key: source.key, outcome: 'error', detail });
+          } else if (isTooLargeError({ error: detail })) {
+            // the plan fit but the live request did not: ledger as too large so the next run segments it
             index[source.key] = { at: options.now(), error: detail };
             summary.errors++;
             onSession?.({ key: source.key, outcome: 'error', detail });

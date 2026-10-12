@@ -496,6 +496,38 @@ describe('runReplay', () => {
     expect(index.ok?.records).toBe(1);
   });
 
+  it('ledgers a live too-large request failure so the next run segments it', async () => {
+    const dir = await tempDir();
+    const sources: ReplaySourceSpec[] = [{ key: 'drift', label: 'drift', load: async () => good }];
+    const tooLarge: JevAsker = {
+      async ask() {
+        throw new Error('history too large for Jev (~8123 tokens after truncation, limit 8000)');
+      },
+    };
+    const summary = await runReplay(sources, tooLarge, () => {}, deps(dir));
+    expect(summary.errors).toBe(1);
+    expect((await loadReplayIndex(dir)).drift?.error).toMatch(/history too large/);
+  });
+
+  it('segments a session whose ledger says too-large even when the plan fits', async () => {
+    const dir = await tempDir();
+    await saveReplayIndex(dir, {
+      drift: { at: 1, error: 'history too large for Jev (~8123 tokens after truncation, limit 8000)' },
+    });
+    const sources: ReplaySourceSpec[] = [{ key: 'drift', label: 'drift', load: async () => good }];
+    const details: string[] = [];
+    const summary = await runReplay(
+      sources,
+      asker(),
+      () => {},
+      { ...deps(dir), segmentOversized: true },
+      (event) => details.push(event.detail ?? ''),
+    );
+    expect(summary.replayed).toBe(1);
+    expect(details[0]).toMatch(/segment/);
+    expect((await loadReplayIndex(dir)).drift?.records).toBeGreaterThan(0);
+  });
+
   it('planning sees compactOptions: an oversized session is a ledgered plan error, not a breaker trip', async () => {
     const dir = await tempDir();
     const sources: ReplaySourceSpec[] = [
