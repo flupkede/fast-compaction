@@ -605,6 +605,28 @@ describe('parseReplayArgs', () => {
     expect(() => parseReplayArgs(['--max-state-tokens', 'abc'])).toThrow(/>= 0/);
     expect(() => parseReplayArgs(['--max-state-tokens', '-5'])).toThrow(/>= 0/);
   });
+
+  it('parses --request-timeout-ms and validates the number', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(parseReplayArgs(['--request-timeout-ms', '900000'])).toMatchObject({ requestTimeoutMs: 900000 });
+    expect(() => parseReplayArgs(['--request-timeout-ms'])).toThrow(/needs a value/);
+    expect(() => parseReplayArgs(['--request-timeout-ms', 'abc'])).toThrow(/>= 0/);
+  });
+
+  it('resolves the request timeout as flag > OLLAMA_REQUEST_TIMEOUT_MS env > default', async () => {
+    const { resolveRequestTimeoutMs } = await import('../scripts/replay-training.ts');
+    const saved = process.env.OLLAMA_REQUEST_TIMEOUT_MS;
+    try {
+      delete process.env.OLLAMA_REQUEST_TIMEOUT_MS;
+      expect(resolveRequestTimeoutMs({})).toBe(600_000);
+      process.env.OLLAMA_REQUEST_TIMEOUT_MS = '900000';
+      expect(resolveRequestTimeoutMs({})).toBe(900_000);
+      expect(resolveRequestTimeoutMs({ requestTimeoutMs: 120000 })).toBe(120_000);
+    } finally {
+      if (saved === undefined) delete process.env.OLLAMA_REQUEST_TIMEOUT_MS;
+      else process.env.OLLAMA_REQUEST_TIMEOUT_MS = saved;
+    }
+  });
 });
 
 describe('buildAsker', () => {

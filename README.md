@@ -169,7 +169,9 @@ Local runs default to an 8000-token state ceiling: the decision prompt
 (state + instructions + schema) must fit a typical local judge `num_ctx` of
 16384 and the endpoint's 64 KiB request cap; override with
 `--max-state-tokens`. Timed-out sessions are infra-bound, not session-bound:
-they retry on the next run instead of being retired.
+they retry on the next run instead of being retired. Local inference is slow,
+so the per-request timeout defaults to 10 minutes; tune it with
+`--request-timeout-ms` or persist `OLLAMA_REQUEST_TIMEOUT_MS`.
 
 Set `OLLAMA_SYSTEM_ONE_URL` (and optionally `OLLAMA_MODEL`) to persist a LAN
 endpoint without retyping the flags; the flags still override.

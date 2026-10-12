@@ -153,6 +153,8 @@ export interface ReplayArgs {
   model?: string;
   /** Overrides the state token ceiling (default 25000; shrink for small-context models). */
   maxStateTokens?: number;
+  /** Per-request judge timeout in ms (flag > OLLAMA_REQUEST_TIMEOUT_MS env > script default). */
+  requestTimeoutMs?: number;
   /** Re-attempt sessions ledgered "too large" by splitting them at user prompts (default on; `--no-segment` disables). */
   segment?: boolean;
 }
@@ -195,6 +197,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     } else if (arg === '--base-url') args.baseUrl = value(arg, argv[++i]);
     else if (arg === '--model') args.model = value(arg, argv[++i]);
     else if (arg === '--max-state-tokens') args.maxStateTokens = number(arg, argv[++i]);
+    else if (arg === '--request-timeout-ms') args.requestTimeoutMs = number(arg, argv[++i]);
     else if (arg === '--no-segment') args.segment = false;
     else if (arg === '--segment') args.segment = true;
     else throw new Error(`unknown argument "${arg}"`);

@@ -66,6 +66,8 @@ Options:
                           of 16384 and the endpoint's 64 KiB request cap;
                           cloud default 25000; small-context models, e.g.
                           tev1:4b, need ~2000)
+  --request-timeout-ms <n> per-request judge timeout (default 600000; the
+                          OLLAMA_REQUEST_TIMEOUT_MS env var persists it)
   --no-segment            disable the default splitting of sessions ledgered
                           "history too large" into the fewest possible windows,
                           cut at user prompts, replayed as their own records
@@ -95,13 +97,19 @@ async function opencodeSources(dbPath: string, minMessages: number): Promise<Rep
 }
 
 /**
- * Hard ceiling per judge request. A local model can loop indefinitely on
- * degenerate content (observed: clef-flash never answering a repeated-text
- * state), and Node's own 5-minute headers timeout aborts with a message the
- * ledger cannot classify — so the client aborts first, with a phrase the
- * replay ledger treats as deterministic.
+ * Hard ceiling per judge request (local inference on a LAN GPU is slow; the
+ * breaker stops repeated failures anyway). A local model can still loop
+ * indefinitely on degenerate content (observed: clef-flash never answering a
+ * repeated-text state), so the client aborts first, with a phrase the
+ * replay ledger treats as retriable.
  */
-export const REQUEST_TIMEOUT_MS = 240_000;
+export const REQUEST_TIMEOUT_MS = 600_000;
+
+/** Resolves the per-request judge timeout: flag > OLLAMA_REQUEST_TIMEOUT_MS env > default. */
+export function resolveRequestTimeoutMs(args: Pick<ReplayArgs, 'requestTimeoutMs'>): number {
+  const env = Number(process.env.OLLAMA_REQUEST_TIMEOUT_MS);
+  return args.requestTimeoutMs ?? (Number.isFinite(env) && env > 0 ? env : REQUEST_TIMEOUT_MS);
+}
 
 /** Fetch that aborts after `timeoutMs` with a ledger-classifiable error. */
 export function fetchWithTimeout(timeoutMs: number): typeof fetch {
@@ -141,7 +149,7 @@ export function buildAsker(args: ReplayArgs): JevAsker {
     baseUrl: judge.baseUrl,
     apiKey: 'ollama',
     model: judge.model,
-    fetch: fetchWithTimeout(REQUEST_TIMEOUT_MS),
+    fetch: fetchWithTimeout(resolveRequestTimeoutMs(args)),
   });
 }
 
