@@ -296,7 +296,11 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 
 /** True when the ledger entry is an oversized-session error worth segmenting. */
 export function isTooLargeError(entry: Pick<ReplayIndexEntry, 'error'> | undefined): boolean {
-  return !!entry?.error && /history too large for Jev/.test(entry.error);
+  // a server-side 64 KiB cap hit mid-run is the same condition as the client-side fitting failure, so segmentation retries it
+  return (
+    !!entry?.error &&
+    (/history too large for Jev/.test(entry.error) || /must not exceed 64 KiB/.test(entry.error))
+  );
 }
 
 /** A message that starts one of the user's prompts: the natural cut point. */

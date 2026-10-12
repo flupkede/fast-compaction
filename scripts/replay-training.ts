@@ -57,8 +57,10 @@ Options:
   --base-url <url>        full System One endpoint for --asker ollama
                           (default ${OLLAMA_SYSTEM_ONE_URL})
   --model <name>          model for --asker ollama (default ${OLLAMA_MODEL})
-  --max-state-tokens <n>  state token ceiling (default 25000; local models with
-                          small context, e.g. tev1:4b, need ~2000)
+  --max-state-tokens <n>  state token ceiling (local default 12000 — the
+                          endpoint caps requests at 64 KiB; cloud default
+                          25000; small-context models, e.g. tev1:4b, need
+                          ~2000)
   --no-segment            disable the default splitting of sessions ledgered
                           "history too large" into the fewest possible windows,
                           cut at user prompts, replayed as their own records
@@ -128,13 +130,18 @@ export function buildAsker(args: ReplayArgs): JevAsker {
   });
 }
 
+/** The Ollama System One endpoint rejects requests over 64 KiB; 12000 estimated tokens leaves room for the question schema under that cap. */
+export const LOCAL_MAX_STATE_TOKENS = 12000;
+
 /** Builds compactOptions from the parsed flags: token ceiling + identifier stripping. */
 export function buildCompactOptions(
-  args: Pick<ReplayArgs, 'maxStateTokens' | 'noStrip' | 'blocklistPath'>,
+  args: Pick<ReplayArgs, 'maxStateTokens' | 'noStrip' | 'blocklistPath' | 'asker'>,
   blocklist: string[],
 ): CompactOptions {
   let options: CompactOptions = {};
   if (args.maxStateTokens !== undefined) options = { ...options, maxStateTokens: args.maxStateTokens };
+  // local is the default asker and its endpoint caps request size; cloud keeps the library default
+  else if (args.asker !== 'cloud') options = { ...options, maxStateTokens: LOCAL_MAX_STATE_TOKENS };
   if (!args.noStrip) {
     options = { ...options, strip: blocklist.length > 0 ? { blocklist } : {} };
   }

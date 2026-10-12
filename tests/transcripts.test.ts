@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  isTooLargeError,
   listClaudeTranscriptFiles,
   loadClaudeTranscript,
   loadReplayIndex,
@@ -646,7 +647,19 @@ describe('buildCompactOptions', () => {
       maxStateTokens: 1500,
       strip: {},
     });
-    expect(buildCompactOptions({ noStrip: true }, [])).toEqual({});
+    // no asker means local, so the local ceiling applies even with --no-strip
+    expect(buildCompactOptions({ noStrip: true }, [])).toEqual({ maxStateTokens: 12000 });
+  });
+
+  it('defaults the local asker to 12000 state tokens; explicit flag and cloud do not', async () => {
+    const { buildCompactOptions } = await import('../scripts/replay-training.ts');
+    expect(buildCompactOptions({}, [])).toEqual({ maxStateTokens: 12000, strip: {} });
+    expect(buildCompactOptions({ asker: 'ollama' }, [])).toEqual({ maxStateTokens: 12000, strip: {} });
+    expect(buildCompactOptions({ asker: 'cloud' }, [])).toEqual({ strip: {} });
+    expect(buildCompactOptions({ maxStateTokens: 500, asker: 'ollama' }, [])).toEqual({
+      maxStateTokens: 500,
+      strip: {},
+    });
   });
 });
 
@@ -755,6 +768,14 @@ describe('segmented replay of oversized sessions', () => {
     const index = await loadReplayIndex(dir);
     expect(index.big?.records).toBe(summary.records);
     expect(index.big?.error).toBeUndefined();
+  });
+
+  it('treats a ledgered 413 64 KiB rejection as too large, so segmentation retries it', () => {
+    expect(
+      isTooLargeError({
+        error: 'Jev request failed (413): {"error":"text and schema must not exceed 64 KiB"}',
+      }),
+    ).toBe(true);
   });
 
   it('leaves other errors ledgered even in segment mode', async () => {

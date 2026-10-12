@@ -165,6 +165,9 @@ ollama pull clef-flash            # needs Ollama >= 0.35.1
 npm run replay                     # judges locally by default
 ```
 
+Local runs default to a 12000-token state ceiling because the endpoint caps
+requests at 64 KiB; override with `--max-state-tokens`.
+
 Remote endpoints take over via `--asker cloud` (plus `--base-url` /
 `--model` for other System One-compatible servers). The hook takes the same
 choice through its `baseUrl` plugin option (plus `model: clef-flash` and a
