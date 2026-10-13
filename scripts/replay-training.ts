@@ -136,6 +136,24 @@ export function resolveLocalJudge(args: Pick<ReplayArgs, 'baseUrl' | 'model'>): 
   };
 }
 
+/**
+ * Serializes judge asks for one asker. Node's built-in fetch aborts any
+ * request whose response takes over 300s (undici headersTimeout —
+ * UND_ERR_HEADERS_TIMEOUT, unconfigurable on the global fetch), and a local
+ * GPU answers one request at a time, so a parallel burst just builds a queue
+ * whose tail Node kills while the model is still working on it.
+ */
+export function serializeAsker(asker: JevAsker): JevAsker {
+  let chain: Promise<unknown> = Promise.resolve();
+  return {
+    ask(state, questions) {
+      const run = chain.then(() => asker.ask(state, questions));
+      chain = run.catch(() => {});
+      return run;
+    },
+  };
+}
+
 /** Picks the judge from the parsed flags: local Ollama by default, or the TypeSafe cloud. */
 export function buildAsker(args: ReplayArgs): JevAsker {
   if (args.asker === 'cloud') {
@@ -145,12 +163,14 @@ export function buildAsker(args: ReplayArgs): JevAsker {
     return new JevClient();
   }
   const judge = resolveLocalJudge(args);
-  return new JevClient({
-    baseUrl: judge.baseUrl,
-    apiKey: 'ollama',
-    model: judge.model,
-    fetch: fetchWithTimeout(resolveRequestTimeoutMs(args)),
-  });
+  return serializeAsker(
+    new JevClient({
+      baseUrl: judge.baseUrl,
+      apiKey: 'ollama',
+      model: judge.model,
+      fetch: fetchWithTimeout(resolveRequestTimeoutMs(args)),
+    }),
+  );
 }
 
 /**

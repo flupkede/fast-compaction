@@ -734,13 +734,33 @@ describe('buildAsker', () => {
     }
   });
 
+  it('serializes local judge asks so one slow GPU is never asked in parallel', async () => {
+    const events: string[] = [];
+    globalThis.fetch = (async (_url: string | URL | Request, _init?: RequestInit) => {
+      events.push('start');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      events.push('end');
+      return new Response(JSON.stringify({ answers: { q1: { type: 'noul', noul: 0.5 } } }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const buildAsker = await loadBuildAsker();
+      const asker = buildAsker({ dryRun: false, source: 'both', asker: 'ollama' });
+      const first = asker.ask('state one', { q1: { type: 'noul', instructions: 'irrelevant' } });
+      const second = asker.ask('state two', { q1: { type: 'noul', instructions: 'irrelevant' } });
+      await Promise.all([first, second]);
+      // the second request may only start after the first has fully answered
+      expect(events).toEqual(['start', 'end', 'start', 'end']);
+    } finally {
+      events.length = 0;
+    }
+  });
+
   it('keeps the cloud path key-gated', async () => {
     const buildAsker = await loadBuildAsker();
     const saved = process.env.TYPESAFE_API_KEY;
     delete process.env.TYPESAFE_API_KEY;
     try {
-      expect(() => buildAsker({ dryRun: false, source: 'both', asker: 'cloud' })).toThrow(/--asker ollama/);
-    } finally {
+      expect(() => buildAsker({ dryRun: false, source: 'both', asker: 'cloud' })).toThrow(/--asker ollama/);    } finally {
       if (saved !== undefined) process.env.TYPESAFE_API_KEY = saved;
     }
   });
