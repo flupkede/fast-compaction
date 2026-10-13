@@ -194,8 +194,11 @@ The replayed records are a distillation set for a small local judge:
    `fine-tune/train.jsonl` + `fine-tune/val.jsonl` (stable per-session split,
    5% held out by default) in a chat format mapping `{state, questions,
    keepThreshold}` to the teacher's noul answers.
-2. Fine-tune a small student (1.7B or 4B class) with the QLoRA tooling of
-   your choice on `train.jsonl`, serving the model behind any
+2. Fine-tune a small student on `train.jsonl` with
+   `scripts/train-student.py` (Unsloth QLoRA, trains on assistant tokens
+   only, exports GGUF). Tuned for an 8 GB GPU: 1.7B at seq 8192 fits
+   (~10–14 h for 2 epochs on a 3060 Ti); 4B needs `--seq-len 6144` and is
+   tight on 8 GB. Any QLoRA tooling works — serve the result behind a
    System One-compatible endpoint.
 3. `npm run agreement -- --base-url <your-judge>` — replays the held-out
    validation examples against your judge and reports decision agreement,
