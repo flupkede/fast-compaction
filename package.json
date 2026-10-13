@@ -23,6 +23,8 @@
     "typecheck": "tsc --noEmit && npm run typecheck:hooks && npm run typecheck:scripts",
     "test": "vitest run",
     "replay": "tsx scripts/replay-training.ts",
+    "prepare-training": "tsx scripts/prepare-training.ts",
+    "agreement": "tsx scripts/agreement-test.ts",
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",

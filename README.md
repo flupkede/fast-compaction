@@ -186,6 +186,24 @@ raised `jevTimeoutMs` — local inference is slower than the cloud API and the
 hook falls back to the built-in summary on timeout). The library layer is
 unchanged: `new JevClient({ baseUrl, apiKey: 'ollama', model })`.
 
+## Training your own judge
+
+The replayed records are a distillation set for a small local judge:
+
+1. `npm run prepare-training` — converts `compactions-*.jsonl` into
+   `fine-tune/train.jsonl` + `fine-tune/val.jsonl` (stable per-session split,
+   5% held out by default) in a chat format mapping `{state, questions,
+   keepThreshold}` to the teacher's noul answers.
+2. Fine-tune a small student (1.7B or 4B class) with the QLoRA tooling of
+   your choice on `train.jsonl`, serving the model behind any
+   System One-compatible endpoint.
+3. `npm run agreement -- --base-url <your-judge>` — replays the held-out
+   validation examples against your judge and reports decision agreement,
+   mean noul error and false drops (teacher keep, judge drop — the expensive
+   error). Aim for ≥90% agreement with few false drops before switching the
+   hook or replay to the student.
+
+
 Progress is ledgered in `replay-index.json` inside the training dir, so an
 interrupted run continues instead of duplicating records; sessions that failed
 against the judge stay unledgered and retry. Sessions ledgered "history too
