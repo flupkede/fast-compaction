@@ -49,7 +49,7 @@ def main() -> None:
     tpl = tokenizer.apply_chat_template
 
     def fmt(r):
-        return {"text": tpl(r, tokenize=False)}
+        return {"text": tpl(r["messages"], tokenize=False)}
 
     ds = Dataset.from_list([{"messages": r} for r in rows]).map(fmt)
     if args.val and os.path.exists(args.val):
@@ -76,18 +76,19 @@ def main() -> None:
         use_gradient_checkpointing="unsloth", random_state=3407)
 
     trainer = SFTTrainer(
-        model=model, tokenizer=tokenizer, train_dataset=ds, eval_dataset=val,
-        dataset_text_field="text", max_seq_length=args.seq_len,
+        model=model, train_dataset=ds, eval_dataset=val,
+        processing_class=tokenizer,
         args=SFTConfig(
             per_device_train_batch_size=1, gradient_accumulation_steps=16,
             num_train_epochs=args.epochs, learning_rate=args.lr,
-            lr_scheduler_type="cosine", warmup_ratio=0.05, logging_steps=10,
+            lr_scheduler_type="cosine", warmup_steps=30, logging_steps=10,
             eval_strategy="steps" if val else "no", eval_steps=100 if val else None,
             save_strategy="no", bf16=True, seed=3407,
-            optim="paged_adamw_8bit", output_dir=args.out, report_to="none"))
+            optim="paged_adamw_8bit", output_dir=args.out, report_to="none",
+            max_length=args.seq_len, dataset_text_field="text"))
     trainer = train_on_responses_only(
         trainer, instruction_part="<|im_start|>user\n",
-        assistant_part="<|im_start|>assistant\n")
+        response_part="<|im_start|>assistant\n")
     trainer.train()
     if val:
         trainer.evaluate()
