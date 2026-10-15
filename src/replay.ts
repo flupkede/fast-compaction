@@ -82,13 +82,24 @@ export interface SessionPlan {
 /** Counts what a replay of this transcript would ask, without asking it. */
 export function planReplay(messages: readonly Message[], options: CompactOptions = {}): SessionPlan {
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip);
+  const calls = collectToolCalls(
+    messages,
+    resolved.preserveRecentMessages,
+    resolved.strip,
+    resolved.preserveStartMessages,
+  );
   const candidates = calls.filter((call) => !call.pinned);
   try {
     const fitted = fitState(messages, calls, resolved);
     const prose = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
     const proseCandidates = prose.filter(
-      (entry) => !isPinned(entry.i, messages.length, resolved.preserveRecentMessages),
+      (entry) =>
+        !isPinned(
+          entry.i,
+          messages.length,
+          resolved.preserveRecentMessages,
+          resolved.preserveStartMessages,
+        ),
     );
     const batches = batchCalls(candidates, fitted.tokens, resolved);
     const requests =

@@ -119,6 +119,8 @@ put it in a source file.
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
+| `preserveStartMessages` | `2` | Oldest messages the token budget never demotes (active with `targetTokens`) |
+| `targetTokens` | off | Absolute estimated-token ceiling for the compacted transcript; entries Jev kept are demoted budget-wise (results, then calls, then prose, lowest score first) until it fits |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
@@ -224,8 +226,9 @@ stage was needed, and the number of requests.
 
 ## Limitations
 
-- Only tool calls and results are candidates; text messages are never removed
-  or shortened in the output (they are only abridged in the state Jev sees).
+- Without `targetTokens`, only tool calls and results are candidates and text
+  messages are never removed; with a token target, kept prose can also be
+  dropped under budget pressure, after tool results and whole calls.
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a probability is not a proof that a
   result is safe to delete. The assistant can always re-run the tool.

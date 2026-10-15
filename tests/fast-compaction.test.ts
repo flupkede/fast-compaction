@@ -11,9 +11,10 @@ import {
   fitState,
   JevClient,
   parseJevResponse,
-  reductionRatio,
-  resolveOptions,
-  type HistoryToolCall,
+   reductionRatio,
+   resolveOptions,
+   transcriptTokens,
+   type HistoryToolCall,
   type JevAsker,
   type JevQuestions,
   type Message,
@@ -478,6 +479,123 @@ describe('compact', () => {
     await expect(compact(transcript(), broken, { preserveRecentMessages: 1 })).rejects.toThrow(
       /Invalid judge answer/,
     );
+  });
+});
+
+describe('budget compaction', () => {
+  it('demotes results, then calls, then prose, lowest score first, start and recent untouched', async () => {
+    const messages = [
+      message('user', 'seed context nobody may drop'),
+      message('assistant', 'ack'),
+      call('tool-1', 'Read', { file_path: 'a' }, 'x'),
+      result('tool-1', 'x'.repeat(6000)),
+      call('tool-2', 'Read', { file_path: 'b' }, 'x'),
+      result('tool-2', 'x'.repeat(6000)),
+      call('tool-3', 'Bash', { command: 'npm test' }, 'x'),
+      result('tool-3', 'x'.repeat(6000)),
+      message('assistant', 'prose one'),
+      message('user', 'latest question'),
+    ];
+    const answer = (name: string): number =>
+      name === 'result_t1' ? 0.6 : name === 'result_t3' ? 0.7 : name === 'msg_8' ? 0.55 : 0.9;
+    // two truncated results free ~2×900 tokens, one only ~900: exactly t1 + t3 must go
+    const output = await compact(messages, fakeJev(answer), {
+      preserveRecentMessages: 1,
+      targetTokens: transcriptTokens(messages) - 1500,
+    });
+    expect(output.decisions.map((d) => [d.id, d.action, d.reason])).toEqual([
+      ['t1', 'drop_result', 'budget'],
+      ['t2', 'keep', 'kept'],
+      ['t3', 'drop_result', 'budget'],
+    ]);
+    const resultText = (id: string): string | undefined =>
+      output.messages.flatMap((m) => m.toolResults ?? []).find((r) => r.tool_use_id === id)?.text;
+    expect(resultText('tool-1')).toContain('[fast-compaction truncated');
+    expect(resultText('tool-3')).toContain('[fast-compaction truncated');
+    expect(resultText('tool-2')).toBe('x'.repeat(6000));
+    expect(output.messages[0]).toBe(messages[0]);
+    expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
+      [0, true, 'recent'],
+      [1, true, 'recent'],
+      [8, true, 'kept'],
+      [9, true, 'recent'],
+    ]);
+    expect(output.stats.budgetEvictions).toBe(2);
+  });
+
+  it('drops never-judged prose before judged prose under budget pressure', async () => {
+    const messages = [
+      message('user', 'seed context for the session'),
+      message('assistant', 'filler line'),
+      message('assistant', 'judged prose stays because high'),
+      message('assistant', 'never judged prose drops first'),
+      message('user', 'latest question'),
+    ];
+    const output = await compact(messages, {
+      async ask(_state, questions: JevQuestions) {
+        const answers = Object.fromEntries(
+          Object.keys(questions)
+            .filter((key) => key !== 'msg_3')
+            .map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+        );
+        return { answers };
+      },
+    }, { preserveRecentMessages: 1, targetTokens: transcriptTokens(messages) - 2 });
+    expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
+      [0, true, 'recent'],
+      [1, true, 'recent'],
+      [2, true, 'kept'],
+      [3, false, 'budget'],
+      [4, true, 'recent'],
+    ]);
+    expect(output.messages.map((m) => m.text)).toEqual([
+      'seed context for the session',
+      'filler line',
+      'judged prose stays because high',
+      'latest question',
+    ]);
+    expect(output.stats.budgetEvictions).toBe(1);
+  });
+
+  it('evicts everything evictable best-effort and leaves pinned messages intact', async () => {
+    const messages = [
+      message('user', 'seed'),
+      message('assistant', 'early note'),
+      call('tool-1', 'Read', { file_path: 'a' }, 'x'),
+      result('tool-1', 'x'.repeat(600)),
+      message('assistant', 'middle prose'),
+      message('user', 'latest'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.9), {
+      preserveRecentMessages: 1,
+      targetTokens: 1,
+    });
+    expect(output.decisions.map((d) => [d.id, d.action, d.reason])).toEqual([
+      ['t1', 'drop_call', 'budget'],
+    ]);
+    expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
+      [0, true, 'recent'],
+      [1, true, 'recent'],
+      [4, false, 'budget'],
+      [5, true, 'recent'],
+    ]);
+    expect(output.messages).toEqual([messages[0], messages[1], messages[5]]);
+    expect(output.messages[0]).toBe(messages[0]);
+    expect(output.stats.budgetEvictions).toBe(3);
+  });
+
+  it('leaves decisions untouched when the target already fits', async () => {
+    const messages = transcript();
+    const plain = await compact(messages, fakeJev(() => 0.95), { preserveRecentMessages: 1 });
+    // preserveStartMessages 0 aligns the pinning, which the budget would otherwise extend
+    const budgeted = await compact(messages, fakeJev(() => 0.95), {
+      preserveRecentMessages: 1,
+      preserveStartMessages: 0,
+      targetTokens: 1_000_000,
+    });
+    expect(budgeted.decisions).toEqual(plain.decisions);
+    expect(budgeted.messageDecisions).toEqual(plain.messageDecisions);
+    expect(budgeted.stats.budgetEvictions).toBe(0);
   });
 });
 

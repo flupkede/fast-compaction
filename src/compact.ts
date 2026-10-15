@@ -23,6 +23,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
+  preserveStartMessages: 2,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
@@ -37,6 +38,8 @@ function finite(value: number | undefined, fallback: number): number {
 }
 
 export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOptions {
+  const target = finite(options.targetTokens, Number.NaN);
+  const targetTokens = Number.isFinite(target) ? Math.max(1, Math.floor(target)) : undefined;
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
     keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
@@ -55,6 +58,18 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    targetTokens,
+    // the start window only matters under budget pressure; 0 keeps
+    // threshold-only compaction identical to before
+    preserveStartMessages:
+      targetTokens === undefined
+        ? 0
+        : Math.max(
+            0,
+            Math.floor(
+              finite(options.preserveStartMessages, DEFAULT_OPTIONS.preserveStartMessages),
+            ),
+          ),
     trainingLog: options.trainingLog,
     trainingSource: options.trainingSource ?? 'live',
     strip: options.strip ? createStripper(options.strip) : undefined,
@@ -330,6 +345,97 @@ export function messageChars(message: Message): number {
   return total;
 }
 
+/**
+ * Estimated transcript tokens: text, tool inputs and tool results, measured
+ * with the same heuristic as the Jev state. The tool result carries the
+ * outcome, so the mirrored tool-use text is not counted twice.
+ */
+export function transcriptTokens(messages: readonly Message[]): number {
+  let text = '';
+  for (const message of messages) {
+    text += message.text;
+    for (const tool of message.toolUses) {
+      try {
+        text += JSON.stringify(tool.input);
+      } catch {
+        text += ' ';
+      }
+    }
+    for (const result of message.toolResults ?? []) text += result.text;
+  }
+  return estimateTokens(text);
+}
+
+/**
+ * Demotes threshold-kept entries until the compacted transcript fits
+ * `targetTokens`: kept results first, then whole calls, then kept prose —
+ * lowest Jev score first, oldest on ties, protected windows never touched.
+ * Best-effort: stops when nothing evictable remains. Returns the number of
+ * demotions applied.
+ */
+function applyBudget(
+  messages: readonly Message[],
+  decisions: CallDecision[],
+  messageDecisions: MessageDecision[],
+  calls: readonly ToolCall[],
+  messageAnswers: ReadonlyMap<number, number>,
+  targetTokens: number,
+  headChars: number,
+): number {
+  const over = (): boolean =>
+    transcriptTokens(applyDecisions(messages, decisions, calls, headChars, messageDecisions)) >
+    targetTokens;
+  const ranked = <T>(
+    items: readonly T[],
+    score: (item: T) => number,
+    order: (item: T) => number,
+  ): T[] =>
+    items
+      .map((item) => ({ item, score: score(item) }))
+      .sort((a, b) => a.score - b.score || order(a.item) - order(b.item))
+      .map(({ item }) => item);
+  const results = ranked(
+    decisions.flatMap((decision, index) =>
+      decision.action === 'keep' && decision.reason !== 'pinned' ? [index] : [],
+    ),
+    (index) => decisions[index]!.keepResult,
+    (index) => index,
+  );
+  const callsLeft = ranked(
+    decisions.flatMap((decision, index) =>
+      decision.reason !== 'pinned' && decision.action !== 'drop_call' ? [index] : [],
+    ),
+    (index) => decisions[index]!.keepCall,
+    (index) => index,
+  );
+  // never-answered prose was never scored: it ranks below every judged entry
+  const prose = ranked(
+    messageDecisions.flatMap((decision, index) =>
+      decision.keep && decision.reason !== 'recent' ? [index] : [],
+    ),
+    (index) => messageAnswers.get(messageDecisions[index]!.i) ?? 0,
+    (index) => messageDecisions[index]!.i,
+  );
+
+  let evictions = 0;
+  for (const index of results) {
+    if (!over()) return evictions;
+    decisions[index] = { ...decisions[index]!, action: 'drop_result', reason: 'budget' };
+    evictions += 1;
+  }
+  for (const index of callsLeft) {
+    if (!over()) return evictions;
+    decisions[index] = { ...decisions[index]!, action: 'drop_call', reason: 'budget' };
+    evictions += 1;
+  }
+  for (const index of prose) {
+    if (!over()) return evictions;
+    messageDecisions[index] = { ...messageDecisions[index]!, keep: false, reason: 'budget' };
+    evictions += 1;
+  }
+  return evictions;
+}
+
 export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   const { charsBefore, charsAfter } = result.stats;
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
@@ -353,7 +459,12 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages, resolved.strip);
+  const calls = collectToolCalls(
+    messages,
+    resolved.preserveRecentMessages,
+    resolved.strip,
+    resolved.preserveStartMessages,
+  );
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
@@ -364,7 +475,7 @@ export async function compact(
   let proseEntries: HistoryEntry[] = [];
   let messageCandidates: HistoryEntry[] = [];
   const protectedIndex = (i: number): boolean =>
-    isPinned(i, messages.length, resolved.preserveRecentMessages);
+    isPinned(i, messages.length, resolved.preserveRecentMessages, resolved.preserveStartMessages);
   if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved);
     fitted = state;
@@ -405,6 +516,18 @@ export async function compact(
       resolved,
     ),
   );
+  const budgetEvictions =
+    resolved.targetTokens === undefined
+      ? 0
+      : applyBudget(
+          messages,
+          decisions,
+          messageDecisions,
+          calls,
+          messageAnswers,
+          resolved.targetTokens,
+          resolved.truncateHeadChars,
+        );
   const kept = applyDecisions(
     messages,
     decisions,
@@ -457,7 +580,9 @@ export async function compact(
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
+      /** Prose entries judged droppable and removed. */
       messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
+      budgetEvictions,
       stateTokens: (fitted ?? EMPTY_FITTED).tokens,
       stateStage: (fitted ?? EMPTY_FITTED).stage,
       requests:

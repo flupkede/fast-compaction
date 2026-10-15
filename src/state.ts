@@ -53,8 +53,13 @@ export function isPinned(
   index: number,
   total: number,
   preserveRecentMessages: number,
+  preserveStartMessages = 0,
 ): boolean {
-  return index === 0 || index >= total - preserveRecentMessages;
+  return (
+    index < preserveStartMessages ||
+    index === 0 ||
+    index >= total - preserveRecentMessages
+  );
 }
 
 /**
@@ -65,6 +70,7 @@ export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
   strip?: Stripper,
+  preserveStartMessages?: number,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -88,8 +94,8 @@ export function collectToolCalls(
         resultChars: found.result.text.length,
         isError: found.result.isError ?? false,
         pinned:
-          isPinned(callIndex, messages.length, preserveRecentMessages) ||
-          isPinned(found.index, messages.length, preserveRecentMessages),
+          isPinned(callIndex, messages.length, preserveRecentMessages, preserveStartMessages) ||
+          isPinned(found.index, messages.length, preserveRecentMessages, preserveStartMessages),
       });
     }
   });
@@ -208,7 +214,9 @@ export function goalFromMessages(messages: readonly Message[], strip?: Stripper)
 export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
-  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal' | 'strip'>,
+  options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal' | 'strip'> & {
+    preserveStartMessages?: number;
+  },
 ): FittedState {
   const strip = options.strip;
   const goal = options.goal || goalFromMessages(messages, strip);
@@ -252,7 +260,7 @@ export function fitState(
   }
 
   const pinned = (entry: HistoryEntry): boolean =>
-    isPinned(entry.i, messages.length, options.preserveRecentMessages);
+    isPinned(entry.i, messages.length, options.preserveRecentMessages, options.preserveStartMessages);
   const indices = history.map((_, index) => index);
   const order = [
     ...indices.filter((index) => !pinned(history[index]!)),

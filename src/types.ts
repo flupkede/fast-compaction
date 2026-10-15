@@ -62,7 +62,7 @@ export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
+  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped' | 'budget';
 }
 
 export interface HistoryToolCall {
@@ -101,6 +101,17 @@ export interface CompactOptions {
   keepThreshold?: number;
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
+  /**
+   * Oldest messages the token budget never demotes. Default 2; only active
+   * together with `targetTokens`.
+   */
+  preserveStartMessages?: number;
+  /**
+   * Absolute estimated-token ceiling for the compacted transcript; when set,
+   * entries Jev kept are demoted budget-wise (results, then calls, then
+   * prose, lowest score first). undefined keeps threshold-only behaviour.
+   */
+  targetTokens?: number;
   /** Estimated token ceiling for the state. Default 25000. */
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
@@ -129,6 +140,8 @@ export interface ResolvedCompactOptions {
   goal: string;
   keepThreshold: number;
   preserveRecentMessages: number;
+  preserveStartMessages: number;
+  targetTokens?: number;
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
@@ -154,6 +167,8 @@ export interface CompactResult {
     pinned: number;
     /** Prose entries judged droppable and removed. */
     messagesDropped: number;
+    /** Entries demoted by the token budget (calls + prose); 0 without `targetTokens`. */
+    budgetEvictions: number;
     stateTokens: number;
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;
@@ -200,7 +215,7 @@ export interface MessageDecision {
   /** Characters of prose the entry carried when judged. */
   chars: number;
   keep: boolean;
-  reason: 'kept' | 'dropped' | 'recent';
+  reason: 'kept' | 'dropped' | 'recent' | 'budget';
 }
 
 /** The `state` of a Jev request: a string or any JSON-serialisable object. */
