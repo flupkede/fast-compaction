@@ -83,6 +83,46 @@ describe('hook config', () => {
       trainingLog: false,
     });
   });
+
+  it('applies ollama defaults when asker is ollama', () => {
+    expect(resolveHookConfig({ asker: 'ollama' })).toEqual({
+      asker: 'ollama',
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      targetFloorStartPercent: 50,
+      targetFloorMinPercent: 25,
+      targetFloorStepPercent: 5,
+      baseUrl: 'http://localhost:11434/v1/systemone',
+      model: 'clef-flash',
+      jevTimeoutMs: 600000,
+      trainingLog: false,
+    });
+  });
+
+  it('lets explicit baseUrl, model and jevTimeoutMs win over the ollama defaults', () => {
+    const config = resolveHookConfig({
+      asker: 'ollama',
+      baseUrl: 'http://gpu:11434/v1/systemone',
+      ollamaUrl: 'http://ignored:11434/v1/systemone',
+      model: 'student',
+      jevTimeoutMs: 1234,
+    });
+    expect(config.baseUrl).toBe('http://gpu:11434/v1/systemone');
+    expect(config.model).toBe('student');
+    expect(config.jevTimeoutMs).toBe(1234);
+  });
+
+  it('falls back to ollamaUrl when baseUrl is not set for the ollama asker', () => {
+    const config = resolveHookConfig({ asker: 'ollama', ollamaUrl: 'http://gpu:11434/v1/systemone' });
+    expect(config.baseUrl).toBe('http://gpu:11434/v1/systemone');
+  });
+
+  it('ignores ollamaUrl when the asker is cloud', () => {
+    const config = resolveHookConfig({ ollamaUrl: 'http://gpu:11434/v1/systemone' });
+    expect(config.baseUrl).toBeUndefined();
+    expect(config.model).toBe('jev-latest');
+    expect(config.jevTimeoutMs).toBe(8000);
+  });
 });
 
 describe('nextFloorPercent', () => {
@@ -240,5 +280,11 @@ describe('compactSession', () => {
     expect(urls).toEqual(['http://pc:11434/v1/systemone', 'http://pc:11434/v1/systemone']);
     expect(JSON.parse(bodies[0]!).model).toBe('clef-flash');
     expect(result.stats.requests).toBe(2);
+  });
+
+  it('accepts an ollama-shaped config without an API key', async () => {
+    const config = resolveHookConfig({ asker: 'ollama' });
+    expect(config.baseUrl).toBeDefined();
+    await expect(compactSession(transcript(), config, jevFetch(() => 0.9))).resolves.toHaveProperty('result');
   });
 });

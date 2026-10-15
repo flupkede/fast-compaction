@@ -48,6 +48,7 @@ The plugin declares these `userConfig` values in
 
 | Option | Default |
 | --- | ---: |
+| `asker` | `cloud` |
 | `keepThreshold` | `0.5` |
 | `preserveRecentMessages` | `6` |
 | `preserveStartMessages` | `2` |
@@ -60,18 +61,24 @@ The plugin declares these `userConfig` values in
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+| `ollamaUrl` | `http://localhost:11434/v1/systemone` |
 | `jevTimeoutMs` | `8000` |
 | `trainingLog` | `false` |
 | `trainingDir` | `~/.fast-compaction/training` |
+
+`asker` picks the judge: `cloud` (default) asks the TypeSafe Jev API and needs
+the `apiKey`; `ollama` posts to the local Ollama System One endpoint
+(`ollamaUrl`) with model `clef-flash` and a 10-minute timeout — local
+inference is slow — unless explicit options override.
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
-Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
+Every option except `apiKey`, `asker`, `compactAtPercent`, `minReductionRatio`,
 `targetFloorStartPercent`, `targetFloorMinPercent`,
-`targetFloorStepPercent`, `jevTimeoutMs`, `model`, `trainingLog` and
-`trainingDir` is passed straight to
+`targetFloorStepPercent`, `jevTimeoutMs`, `model`, `ollamaUrl`,
+`trainingLog` and `trainingDir` is passed straight to
 the library; see the root
 README for what they do. When the session reports its context window, the
 hook also gives the compaction a token target of

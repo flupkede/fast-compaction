@@ -10,6 +10,12 @@
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
     },
+    "asker": {
+      "type": "string",
+      "title": "Judge",
+      "description": "cloud = TypeSafe Jev API (apiKey required); ollama = local Ollama System One endpoint (no key needed)",
+      "default": "cloud"
+    },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
@@ -87,6 +93,12 @@
       "title": "Judge endpoint (local model)",
       "description": "Full System One endpoint to post to. Set to e.g. http://desktop:11434/v1/systemone to use a local Ollama decision model; then no API key is needed. Leave empty for the TypeSafe cloud.",
       "default": ""
+    },
+    "ollamaUrl": {
+      "type": "string",
+      "title": "Ollama endpoint",
+      "description": "System One endpoint of the local Ollama judge, used when asker is ollama",
+      "default": "http://localhost:11434/v1/systemone"
     },
     "jevTimeoutMs": {
       "type": "number",

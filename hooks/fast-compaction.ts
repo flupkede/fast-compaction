@@ -45,6 +45,10 @@ const HOOK_DEFAULTS = {
   targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
   jevTimeoutMs: 8_000,
+  // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
+  ollamaUrl: 'http://localhost:11434/v1/systemone',
+  ollamaModel: 'clef-flash',
+  ollamaTimeoutMs: 600_000,
 };
 
 /** How long after a turn the deferred compaction waits, and how often it retries. */
@@ -68,6 +72,8 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   apiKey?: string;
+  /** `cloud` = TypeSafe Jev API; `ollama` = local Ollama System One endpoint. */
+  asker?: 'cloud' | 'ollama';
   compactAtPercent: number;
   minReductionRatio: number;
   targetFloorStartPercent: number;
@@ -81,6 +87,8 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
    * Ollama decision model at `http://host:11434/v1/systemone`).
    */
   baseUrl?: string;
+  /** Raw `ollamaUrl` option; `baseUrl`'s fallback when `asker` is `ollama`. */
+  ollamaUrl?: string;
   /** Log one training record per Jev compaction to `trainingDir` (or its default). */
   trainingLog: boolean;
   trainingDir?: string;
@@ -89,6 +97,12 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/** The explicit number option, without any default folded in. */
+function rawNumber(options: PluginOptions, key: string): number | undefined {
+  const value = options[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function optionString(options: PluginOptions, key: string): string | undefined {
@@ -115,6 +129,13 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  // Raw option values first, then the asker's defaults; explicit values win in both modes.
+  const askerOption = optionString(options, 'asker');
+  const asker = askerOption === 'ollama' ? 'ollama' : 'cloud';
+  const model = optionString(options, 'model');
+  const jevTimeoutMs = rawNumber(options, 'jevTimeoutMs');
+  const baseUrl = optionString(options, 'baseUrl');
+  const ollamaUrl = optionString(options, 'ollamaUrl');
   const config: HookConfig = {
     ...numbers,
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
@@ -138,8 +159,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       'targetFloorStepPercent',
       HOOK_DEFAULTS.targetFloorStepPercent,
     ),
-    model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
-    jevTimeoutMs: optionNumber(options, 'jevTimeoutMs', HOOK_DEFAULTS.jevTimeoutMs),
+    model: model ?? (asker === 'ollama' ? HOOK_DEFAULTS.ollamaModel : HOOK_DEFAULTS.model),
+    jevTimeoutMs:
+      jevTimeoutMs ??
+      (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.jevTimeoutMs),
     trainingLog: optionBoolean(options, 'trainingLog', false),
   };
   const apiKey = optionString(options, 'apiKey');
@@ -148,8 +171,13 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   if (goal) config.goal = goal;
   const trainingDir = optionString(options, 'trainingDir');
   if (trainingDir) config.trainingDir = trainingDir;
-  const baseUrl = optionString(options, 'baseUrl');
-  if (baseUrl) config.baseUrl = baseUrl;
+  if (askerOption) config.asker = asker;
+  if (ollamaUrl) config.ollamaUrl = ollamaUrl;
+  if (asker === 'ollama') {
+    config.baseUrl = baseUrl ?? ollamaUrl ?? HOOK_DEFAULTS.ollamaUrl;
+  } else if (baseUrl) {
+    config.baseUrl = baseUrl;
+  }
   return config;
 }
 
