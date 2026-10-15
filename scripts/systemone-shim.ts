@@ -23,7 +23,7 @@ export interface ShimOptions {
 const DEFAULTS: ShimOptions = {
   port: 11435,
   ollamaUrl: 'http://127.0.0.1:11434',
-  model: 'student',
+  model: 'fast-compaction',
   numCtx: 24576,
 };
 
@@ -66,10 +66,12 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
     }
     try {
       const body = JSON.parse(await readBody(req)) as {
+        model?: string;
         state: JevState;
         questions: JevQuestions;
         keepThreshold?: number;
       };
+      const model = body.model || config.model;
       const messages = [
         { role: 'system', content: JUDGE_SYSTEM_PROMPT },
         {
@@ -85,7 +87,7 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: config.model,
+          model,
           messages,
           stream: false,
           options: { temperature: 0, num_ctx: config.numCtx },
