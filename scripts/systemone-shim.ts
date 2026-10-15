@@ -1,0 +1,113 @@
+/**
+ * System One-compatible shim for a chat-trained student judge.
+ *
+ * Ollama's /v1/systemone route only serves decision-capable (clef-arch)
+ * models; a fine-tuned chat student needs this translation layer:
+ * POST {state, questions} -> JUDGE_SYSTEM_PROMPT + payload -> ollama
+ * /api/chat -> noul JSON -> {answers}. Run it next to any ollama:
+ *
+ *   npx tsx scripts/systemone-shim.ts --ollama http://ollama.example:11434
+ *   npm run agreement -- --base-url http://localhost:11435/v1/systemone --model student
+ */
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { JUDGE_SYSTEM_PROMPT } from './prepare-training.js';
+import type { JevQuestions, JevResponse, JevState } from '../src/index.js';
+
+export interface ShimOptions {
+  port: number;
+  ollamaUrl: string;
+  model: string;
+}
+
+const DEFAULTS: ShimOptions = { port: 11435, ollamaUrl: 'http://127.0.0.1:11434', model: 'student' };
+
+/** Strips Qwen3 reasoning blocks and any prose around the first/last brace. */
+export function extractJson(text: string): unknown {
+  const clean = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start === -1 || end <= start) throw new Error('student reply has no JSON object');
+  return JSON.parse(clean.slice(start, end + 1));
+}
+
+/** Maps the student's reply onto every question id; missing/unparseable -> 0.5. */
+export function toAnswers(questions: JevQuestions, reply: unknown): JevResponse {
+  const parsed = typeof reply === 'object' && reply !== null ? (reply as Record<string, unknown>) : {};
+  const answers: JevResponse['answers'] = {};
+  for (const id of Object.keys(questions)) {
+    const value = (parsed as Record<string, { noul?: unknown }>)[id]?.noul;
+    const noul = typeof value === 'number' && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
+    answers[id] = { type: 'noul', noul };
+  }
+  return { answers };
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => (data += chunk));
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof fetch = fetch): Server {
+  const config = { ...DEFAULTS, ...options };
+  return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== 'POST') {
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('systemone-shim: POST {state, questions} here\n');
+      return;
+    }
+    try {
+      const body = JSON.parse(await readBody(req)) as {
+        state: JevState;
+        questions: JevQuestions;
+        keepThreshold?: number;
+      };
+      const messages = [
+        { role: 'system', content: JUDGE_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            state: body.state,
+            questions: body.questions,
+            keepThreshold: body.keepThreshold ?? 0.5,
+          }),
+        },
+      ];
+      const upstream = await fetcher(`${config.ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: config.model,
+          messages,
+          stream: false,
+          options: { temperature: 0, num_ctx: 16384 },
+        }),
+      });
+      if (!upstream.ok) {
+        res.writeHead(502).end(JSON.stringify({ error: `ollama: ${await upstream.text()}` }));
+        return;
+      }
+      const reply = (await upstream.json() as { message?: { content?: string } }).message?.content ?? '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(toAnswers(body.questions, extractJson(reply))));
+    } catch (error) {
+      res.writeHead(502).end(JSON.stringify({ error: String(error) }));
+    }
+  });
+}
+
+function stringFlag(name: string): string | undefined {
+  const index = process.argv.indexOf(`--${name}`);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
+if (process.argv[1] && process.argv[1].endsWith('systemone-shim.ts')) {
+  const port = Number(stringFlag('port') ?? DEFAULTS.port);
+  const ollamaUrl = stringFlag('ollama') ?? DEFAULTS.ollamaUrl;
+  const model = stringFlag('model') ?? process.env.OLLAMA_MODEL ?? DEFAULTS.model;
+  createShimServer({ port, ollamaUrl, model }).listen(port, () => {
+    console.log(`systemone-shim: listening on :${port}, ollama ${ollamaUrl}, model ${model}`);
+  });
+}
