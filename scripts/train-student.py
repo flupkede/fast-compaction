@@ -83,13 +83,15 @@ def main() -> None:
             num_train_epochs=args.epochs, learning_rate=args.lr,
             lr_scheduler_type="cosine", warmup_steps=30, logging_steps=10,
             eval_strategy="steps" if val else "no", eval_steps=100 if val else None,
-            save_strategy="no", bf16=True, seed=3407,
+            save_strategy="steps", save_steps=100, save_total_limit=2, bf16=True, seed=3407,
             optim="paged_adamw_8bit", output_dir=args.out, report_to="none",
             max_length=args.seq_len, dataset_text_field="text"))
     trainer = train_on_responses_only(
         trainer, instruction_part="<|im_start|>user\n",
         response_part="<|im_start|>assistant\n")
-    trainer.train()
+    ckpt = args.out if os.path.isdir(args.out) and any(
+        d.startswith("checkpoint-") for d in os.listdir(args.out)) else None
+    trainer.train(resume_from_checkpoint=ckpt)
     if val:
         trainer.evaluate()
 
