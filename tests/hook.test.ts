@@ -4,6 +4,7 @@ import {
   decisionLog,
   decisionLogLines,
   deferredCompact,
+  nextFloorPercent,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -58,6 +59,9 @@ describe('hook config', () => {
     expect(resolveHookConfig({})).toEqual({
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      targetFloorStartPercent: 50,
+      targetFloorMinPercent: 25,
+      targetFloorStepPercent: 5,
       model: 'jev-latest',
       jevTimeoutMs: 8000,
       trainingLog: false,
@@ -72,9 +76,32 @@ describe('hook config', () => {
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      targetFloorStartPercent: 50,
+      targetFloorMinPercent: 25,
+      targetFloorStepPercent: 5,
       jevTimeoutMs: 8000,
       trainingLog: false,
     });
+  });
+});
+
+describe('nextFloorPercent', () => {
+  const config = {
+    targetFloorStartPercent: 50,
+    targetFloorMinPercent: 25,
+    targetFloorStepPercent: 5,
+  };
+
+  it('steps down from the start on a Jev compaction and clamps at the minimum', () => {
+    expect(nextFloorPercent(undefined, 'jev', config)).toBe(45);
+    expect(nextFloorPercent(45, 'jev', config)).toBe(40);
+    expect(nextFloorPercent(27, 'jev', config)).toBe(25);
+    expect(nextFloorPercent(25, 'jev', config)).toBe(25);
+  });
+
+  it('resets to the start after any fallback', () => {
+    expect(nextFloorPercent(35, 'fallback-low', config)).toBe(50);
+    expect(nextFloorPercent(35, 'fallback-error', config)).toBe(50);
   });
 });
 

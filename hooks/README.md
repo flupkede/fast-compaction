@@ -50,8 +50,12 @@ The plugin declares these `userConfig` values in
 | --- | ---: |
 | `keepThreshold` | `0.5` |
 | `preserveRecentMessages` | `6` |
+| `preserveStartMessages` | `2` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
+| `targetFloorStartPercent` | `50` |
+| `targetFloorMinPercent` | `25` |
+| `targetFloorStepPercent` | `5` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
@@ -65,9 +69,17 @@ through `TYPESAFE_API_KEY`. The environment variable is the recommended
 development setup.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio`,
-`jevTimeoutMs`, `model`, `trainingLog` and `trainingDir` is passed straight to
+`targetFloorStartPercent`, `targetFloorMinPercent`,
+`targetFloorStepPercent`, `jevTimeoutMs`, `model`, `trainingLog` and
+`trainingDir` is passed straight to
 the library; see the root
-README for what they do. The `session.compact` hook runs the Jev requests
+README for what they do. When the session reports its context window, the
+hook also gives the compaction a token target of
+`window × floorPercent / 100`: the floor starts at `targetFloorStartPercent`,
+steps down `targetFloorStepPercent` after every accepted Jev compaction down
+to `targetFloorMinPercent`, and resets to the start after any fallback to the
+built-in summary. Without a usage reading (subagents, or `$.session.usage()`
+failing) the compaction runs threshold-only. The `session.compact` hook runs the Jev requests
 concurrently and stops waiting after `jevTimeoutMs`, inside the engine's hook
 budget. If Jev fails or times out,
 the response is malformed, the key is unavailable, the history cannot be

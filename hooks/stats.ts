@@ -41,6 +41,8 @@ export type SessionStats = {
   /** Tokens the latest Jev compaction removed; each later main-loop API call is credited with them until the next compaction. */
   activeDrop: number;
   recent: CompactionRecord[];
+  /** Percentage of the context window the next compaction targets; undefined = no budget compaction yet, the configured start floor applies. */
+  floorPercent?: number;
 };
 
 export const STORE_PREFIX = 'session:';
@@ -84,6 +86,7 @@ export function emptySession(id: string, now: number): SessionStats {
     savedTokens: 0,
     activeDrop: 0,
     recent: [],
+    floorPercent: undefined,
   };
 }
 
@@ -105,6 +108,11 @@ export function reviveSession(id: string, value: unknown, now: number): SessionS
             !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && Object.hasOwn(base.compactions, r.outcome),
         )
       : [],
+    // the spread above copies whatever an older store wrote; normalize explicitly
+    floorPercent:
+      typeof stored.floorPercent === 'number' && Number.isFinite(stored.floorPercent)
+        ? stored.floorPercent
+        : undefined,
   };
 }
 

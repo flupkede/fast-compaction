@@ -29,6 +29,7 @@ import {
   recordTurn,
   reviveSession,
   STORE_PREFIX,
+  type CompactionOutcome,
   type CompactionRecord,
   type SessionStats,
   type TurnSample,
@@ -39,6 +40,9 @@ export const STATS_COMMAND = 'jev-stats';
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
+  targetFloorStartPercent: 50,
+  targetFloorMinPercent: 25,
+  targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
   jevTimeoutMs: 8_000,
 };
@@ -66,6 +70,9 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   apiKey?: string;
   compactAtPercent: number;
   minReductionRatio: number;
+  targetFloorStartPercent: number;
+  targetFloorMinPercent: number;
+  targetFloorStepPercent: number;
   model: string;
   jevTimeoutMs: number;
   /**
@@ -100,6 +107,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   for (const key of [
     'keepThreshold',
     'preserveRecentMessages',
+    'preserveStartMessages',
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
@@ -115,6 +123,21 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
     ),
+    targetFloorStartPercent: optionNumber(
+      options,
+      'targetFloorStartPercent',
+      HOOK_DEFAULTS.targetFloorStartPercent,
+    ),
+    targetFloorMinPercent: optionNumber(
+      options,
+      'targetFloorMinPercent',
+      HOOK_DEFAULTS.targetFloorMinPercent,
+    ),
+    targetFloorStepPercent: optionNumber(
+      options,
+      'targetFloorStepPercent',
+      HOOK_DEFAULTS.targetFloorStepPercent,
+    ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
     jevTimeoutMs: optionNumber(options, 'jevTimeoutMs', HOOK_DEFAULTS.jevTimeoutMs),
     trainingLog: optionBoolean(options, 'trainingLog', false),
@@ -128,6 +151,26 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   const baseUrl = optionString(options, 'baseUrl');
   if (baseUrl) config.baseUrl = baseUrl;
   return config;
+}
+
+/**
+ * The floor for the next compaction's token target: one step down after an
+ * accepted Jev compaction, reset to the start after any built-in-summary
+ * fallback.
+ */
+export function nextFloorPercent(
+  current: number | undefined,
+  outcome: CompactionOutcome,
+  config: Pick<
+    HookConfig,
+    'targetFloorStartPercent' | 'targetFloorMinPercent' | 'targetFloorStepPercent'
+  >,
+): number {
+  if (outcome !== 'jev') return config.targetFloorStartPercent;
+  return Math.max(
+    config.targetFloorMinPercent,
+    (current ?? config.targetFloorStartPercent) - config.targetFloorStepPercent,
+  );
 }
 
 /** A `JevAsker` over the engine's `$.http.fetch`. */
@@ -284,6 +327,7 @@ export function summarize(result: CompactResult): string {
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
+    stats.budgetEvictions > 0 ? `${stats.budgetEvictions} budget` : '',
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
@@ -354,6 +398,13 @@ export async function updateSessionStats(
   const stats = reviveSession(id, await $.store.get(key), now);
   update(stats);
   await $.store.set(key, stats);
+}
+
+/** The session's current compaction floor; sessions without one start at the configured start. */
+async function currentFloorPercent($: StatsHost, config: HookConfig): Promise<number> {
+  const [id, now] = await Promise.all([$.session.id(), $.clock.now()]);
+  const stats = reviveSession(id, await $.store.get(STORE_PREFIX + id), now);
+  return stats.floorPercent ?? config.targetFloorStartPercent;
 }
 
 export async function evictOldStats($: StatsHostStore, now: number): Promise<number> {
@@ -468,15 +519,37 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('session.compact', async ($, event, next) => {
     const agent = event.agentId !== undefined;
     let tokensBefore: number | undefined;
+    let windowTokens: number | undefined;
     if (!agent) {
       try {
-        tokensBefore = (await $.session.usage()).context.tokens;
+        const usage = await $.session.usage();
+        tokensBefore = usage.context.tokens;
+        windowTokens = usage.context.window;
       } catch {
         tokensBefore = undefined;
       }
     }
+    // agents and usage-less sessions compact threshold-only: no ceiling
+    let floor: number | undefined;
+    let targetTokens: number | undefined;
+    if (windowTokens !== undefined) {
+      try {
+        floor = await currentFloorPercent($, configured);
+        targetTokens = Math.round((windowTokens * floor) / 100);
+      } catch {
+        floor = undefined;
+        targetTokens = undefined;
+      }
+    }
+    const persistFloor = (outcome: CompactionOutcome): void => {
+      if (floor === undefined) return;
+      withStats($, (stats) => {
+        stats.floorPercent = nextFloorPercent(floor, outcome, configured);
+      });
+    };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
+      if (targetTokens !== undefined) config.targetTokens = targetTokens;
       const { result, messages } = await withDeadline(
         compactSession(event.messages, config, async (url, init) => {
           const response = await $.http.fetch(url, init);
@@ -499,6 +572,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
           reason: `below ${percent(config.minReductionRatio)}`,
           agent,
         });
+        persistFloor('fallback-low');
         return next(event);
       }
       notify(
@@ -510,11 +584,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
       const dropped = droppedTokens(tokensBefore, ratio);
       if (dropped !== undefined) record.tokensDropped = dropped;
       logCompaction($, record);
+      persistFloor('jev');
       return { messages };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       notify($, `fallback to built-in summary (${reason})`);
       logCompaction($, { outcome: 'fallback-error', reason, agent });
+      persistFloor('fallback-error');
       return next(event);
     }
   });

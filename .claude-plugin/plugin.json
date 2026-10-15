@@ -22,6 +22,12 @@
       "description": "Number of newest messages pinned from compaction.",
       "default": 6
     },
+    "preserveStartMessages": {
+      "type": "number",
+      "title": "Start messages to preserve",
+      "description": "Number of oldest messages the token budget never demotes; active with target floor compaction.",
+      "default": 2
+    },
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
@@ -33,6 +39,24 @@
       "title": "Minimum reduction ratio",
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
+    },
+    "targetFloorStartPercent": {
+      "type": "number",
+      "title": "Target floor start (%)",
+      "description": "Compaction target as a percentage of the context window, starting here; steps down after each accepted Jev compaction and resets on any fallback to the built-in summary.",
+      "default": 50
+    },
+    "targetFloorMinPercent": {
+      "type": "number",
+      "title": "Target floor minimum (%)",
+      "description": "Lowest percentage of the context window the compaction target may step down to.",
+      "default": 25
+    },
+    "targetFloorStepPercent": {
+      "type": "number",
+      "title": "Target floor step (%)",
+      "description": "Percentage points the compaction target steps down after each accepted Jev compaction.",
+      "default": 5
     },
     "maxStateTokens": {
       "type": "number",
