@@ -110,12 +110,16 @@ examples for a future locally trained judge model.
 
 ## Stats
 
-`/jev-stats` prints token and savings totals over every session,
-`/jev-stats session` the current one, `/jev-stats reset` clears them. The
+`/compaction-stats` prints token and savings totals over every session,
+`/compaction-stats session` the current one, `/compaction-stats reset` clears
+them. The
 ledger lives in the plugin's `$.store`, one key per session (the 200 most
 recently active are kept), written from `turn.complete` (main and subagent
 token usage, Claude Code's cost) and `session.compact` (Jev or fallback,
 reduction, duration).
+
+`/compress` triggers fast-compaction immediately — useful where the host's
+compact button bypasses plugin hooks, e.g. Zed's SDK runtime.
 
 `Saved` credits each Jev drop (context before times character reduction) once
 per later main-loop API call until the next compaction, calls per turn

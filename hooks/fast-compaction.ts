@@ -35,7 +35,8 @@ import {
   type TurnSample,
 } from './stats.js';
 
-export const STATS_COMMAND = 'jev-stats';
+export const STATS_COMMAND = 'compaction-stats';
+export const COMPRESS_COMMAND = 'compress';
 
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
@@ -441,7 +442,7 @@ export async function evictOldStats($: StatsHostStore, now: number): Promise<num
   return stale.length;
 }
 
-/** `/jev-stats` (all sessions), `/jev-stats session` (this one), `/jev-stats reset`. */
+/** `/compaction-stats` (all sessions), `/compaction-stats session` (this one), `/compaction-stats reset`. */
 export async function statsCommand(
   $: StatsHostStore,
   args: string,
@@ -531,6 +532,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
         argumentHint: '[session|reset]',
         immediate: true,
       });
+      await $.command.register({
+        name: COMPRESS_COMMAND,
+        description: 'run fast-compaction now',
+        immediate: true,
+      });
       await evictOldStats($, await $.clock.now());
     } catch (error) {
       $.ui.log(`stats setup failed (${error instanceof Error ? error.message : String(error)})`);
@@ -542,6 +548,21 @@ export const register: Register = (on: On, options: PluginOptions) => {
     await statsChain;
     const [id, now] = await Promise.all([$.session.id(), $.clock.now()]);
     return { text: await statsCommand($, event.args, id, now) };
+  });
+
+  // Thin on purpose: the session.compact hook the call dispatches does the work.
+  on('command.run', { command: COMPRESS_COMMAND }, async ($) => {
+    try {
+      const outcome = await $.session.compact();
+      return {
+        text:
+          outcome.skip !== undefined
+            ? `compaction skipped (${outcome.skip})`
+            : 'compaction done',
+      };
+    } catch (error) {
+      return { text: `compaction failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
   });
 
   on('session.compact', async ($, event, next) => {

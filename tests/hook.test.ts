@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COMPRESS_COMMAND,
   compactSession,
   decisionLog,
   decisionLogLines,
   deferredCompact,
   nextFloorPercent,
+  register,
   resolveHookConfig,
+  STATS_COMMAND,
   summarize,
   toSessionMessages,
   withDeadline,
@@ -181,6 +184,81 @@ describe('deferredCompact', () => {
       (text) => logs.push(text),
     );
     expect(logs).toEqual(['auto-compact skipped (turn running)']);
+  });
+});
+
+describe('slash commands', () => {
+  type HookEntry = {
+    pattern: unknown;
+    matcher?: Record<string, unknown>;
+    hook: (...args: unknown[]) => unknown;
+  };
+
+  /** Drives register() without an engine: captures every on() registration. */
+  function registeredHooks(): HookEntry[] {
+    const entries: HookEntry[] = [];
+    const on = (pattern: unknown, ...rest: unknown[]) => {
+      const matcher =
+        typeof rest[0] === 'object' && rest[0] !== null && typeof rest[1] === 'function'
+          ? (rest[0] as Record<string, unknown>)
+          : undefined;
+      entries.push({
+        pattern,
+        matcher,
+        hook: (matcher ? rest[1] : rest[0]) as (...args: unknown[]) => unknown,
+      });
+      return { catch: () => {} };
+    };
+    register(on as unknown as Parameters<typeof register>[0], {});
+    return entries;
+  }
+
+  function runCompress(compact: () => Promise<unknown>): Promise<unknown> {
+    const entry = registeredHooks().find(
+      (e) => e.pattern === 'command.run' && e.matcher?.command === COMPRESS_COMMAND,
+    );
+    return entry!.hook({ session: { compact } }, { command: COMPRESS_COMMAND, args: '' }) as Promise<unknown>;
+  }
+
+  it('registers the stats and compress commands on session.start', async () => {
+    const start = registeredHooks().find((entry) => entry.pattern === 'session.start');
+    const specs: { name: string }[] = [];
+    await start!.hook(
+      {
+        command: { register: async (spec: { name: string }) => void specs.push(spec) },
+        clock: { now: async () => 0 },
+        store: {
+          keys: async () => [],
+          get: async () => undefined,
+          set: async () => {},
+          delete: async () => {},
+        },
+        ui: { log: () => {} },
+      },
+      {},
+      (event: unknown) => event,
+    );
+    expect(specs.map((spec) => spec.name)).toEqual([STATS_COMMAND, COMPRESS_COMMAND]);
+  });
+
+  it('compress asks the engine to compact once and acks the outcome', async () => {
+    let calls = 0;
+    const outcome = await runCompress(async () => {
+      calls += 1;
+      return { messages: [] };
+    });
+    expect(calls).toBe(1);
+    expect(outcome).toEqual({ text: 'compaction done' });
+    expect(await runCompress(async () => ({ skip: 'vetoed' }))).toEqual({
+      text: 'compaction skipped (vetoed)',
+    });
+  });
+
+  it('compress surfaces a rejected compaction in its text', async () => {
+    const outcome = await runCompress(async () => {
+      throw new Error('a turn is running');
+    });
+    expect(outcome).toEqual({ text: 'compaction failed: a turn is running' });
   });
 });
 
