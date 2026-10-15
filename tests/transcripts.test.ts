@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   isRetryableLedgerError,
   isTooLargeError,
@@ -632,9 +632,18 @@ describe('parseReplayArgs', () => {
 describe('buildAsker', () => {
   const realFetch = globalThis.fetch;
   const posted: { url: string; model?: string }[] = [];
+  const realEnvUrl = process.env.OLLAMA_SYSTEM_ONE_URL;
+  const realEnvModel = process.env.OLLAMA_MODEL;
+
+  beforeEach(() => {
+    delete process.env.OLLAMA_SYSTEM_ONE_URL;
+    delete process.env.OLLAMA_MODEL;
+  });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
+    if (realEnvUrl !== undefined) process.env.OLLAMA_SYSTEM_ONE_URL = realEnvUrl;
+    if (realEnvModel !== undefined) process.env.OLLAMA_MODEL = realEnvModel;
   });
 
   async function loadBuildAsker() {
@@ -824,6 +833,7 @@ describe('segmentByFit', () => {
     goal: '',
     keepThreshold: 0.5,
     preserveRecentMessages: 6,
+    preserveStartMessages: 2,
     maxStateTokens: 30000,
     maxRequestTokens: 35000,
     truncateHeadChars: 300,
