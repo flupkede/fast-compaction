@@ -17,9 +17,15 @@ export interface ShimOptions {
   port: number;
   ollamaUrl: string;
   model: string;
+  numCtx: number;
 }
 
-const DEFAULTS: ShimOptions = { port: 11435, ollamaUrl: 'http://127.0.0.1:11434', model: 'student' };
+const DEFAULTS: ShimOptions = {
+  port: 11435,
+  ollamaUrl: 'http://127.0.0.1:11434',
+  model: 'student',
+  numCtx: 24576,
+};
 
 /** Strips Qwen3 reasoning blocks and any prose around the first/last brace. */
 export function extractJson(text: string): unknown {
@@ -82,7 +88,7 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
           model: config.model,
           messages,
           stream: false,
-          options: { temperature: 0, num_ctx: 16384 },
+          options: { temperature: 0, num_ctx: config.numCtx },
         }),
       });
       if (!upstream.ok) {
@@ -107,7 +113,8 @@ if (process.argv[1] && process.argv[1].endsWith('systemone-shim.ts')) {
   const port = Number(stringFlag('port') ?? DEFAULTS.port);
   const ollamaUrl = stringFlag('ollama') ?? DEFAULTS.ollamaUrl;
   const model = stringFlag('model') ?? process.env.OLLAMA_MODEL ?? DEFAULTS.model;
-  createShimServer({ port, ollamaUrl, model }).listen(port, () => {
-    console.log(`systemone-shim: listening on :${port}, ollama ${ollamaUrl}, model ${model}`);
+  const numCtx = Number(stringFlag('num-ctx') ?? DEFAULTS.numCtx);
+  createShimServer({ port, ollamaUrl, model, numCtx }).listen(port, () => {
+    console.log(`systemone-shim: listening on :${port}, ollama ${ollamaUrl}, model ${model}, num_ctx ${numCtx}`);
   });
 }
