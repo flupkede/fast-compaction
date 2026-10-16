@@ -113,6 +113,7 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
           }),
         },
       ];
+      const t0 = Date.now();
       const upstream = await fetcher(`${config.ollamaUrl}/api/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -134,6 +135,12 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
       const payload: Record<string, unknown> = { ...toAnswers(body.questions, extractJson(reply)) };
       if (judge) payload.judge = judge;
       respond(res, 200, JSON.stringify(payload));
+      console.log(
+        `${new Date().toISOString()} ${model} questions=${Object.keys(body.questions).length} ${Date.now() - t0}ms` +
+          (judge
+            ? ` load=${judge.loadMs ?? 0} prefill=${judge.promptMs ?? 0}(${judge.promptTokens ?? 0}) gen=${judge.genMs ?? 0}(${judge.genTokens ?? 0})`
+            : ''),
+      );
     } catch (error) {
       respond(res, 502, JSON.stringify({ error: String(error) }));
     }
