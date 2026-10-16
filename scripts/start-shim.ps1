@@ -8,7 +8,7 @@ $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Sil
 foreach ($conn in $existing) { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue }
 
 Start-Process -FilePath 'npx.cmd' `
-  -ArgumentList 'tsx','scripts\systemone-shim.ts',"--port","$port",'--ollama','http://localhost:11434','--model','fast-compaction','--num-ctx','16384','--keep-alive','1h' `
+  -ArgumentList 'tsx','scripts\systemone-shim.ts',"--port","$port",'--ollama','http://localhost:11434','--model','fast-compaction','--num-ctx','16384','--keep-alive','-1' `
   -WorkingDirectory $repo -WindowStyle Hidden `
   -RedirectStandardOutput "$env:TEMP\shim.log" -RedirectStandardError "$env:TEMP\shim.err.log"
 
