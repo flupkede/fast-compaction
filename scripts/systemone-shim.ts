@@ -57,11 +57,19 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+/** One response exit: ignores double writes when a client vanished mid-request. */
+function respond(res: ServerResponse, status: number, body: string): void {
+  if (res.headersSent || res.destroyed) return;
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(body);
+}
+
 export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof fetch = fetch): Server {
   const config = { ...DEFAULTS, ...options };
   return createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    res.on('error', () => undefined);
     if (req.method !== 'POST') {
-      res.writeHead(200, { 'content-type': 'text/plain' }).end('systemone-shim: POST {state, questions} here\n');
+      respond(res, 200, 'systemone-shim: POST {state, questions} here\n');
       return;
     }
     try {
@@ -94,14 +102,13 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
         }),
       });
       if (!upstream.ok) {
-        res.writeHead(502).end(JSON.stringify({ error: `ollama: ${await upstream.text()}` }));
+        respond(res, 502, JSON.stringify({ error: `ollama: ${await upstream.text()}` }));
         return;
       }
       const reply = (await upstream.json() as { message?: { content?: string } }).message?.content ?? '';
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(toAnswers(body.questions, extractJson(reply))));
+      respond(res, 200, JSON.stringify(toAnswers(body.questions, extractJson(reply))));
     } catch (error) {
-      res.writeHead(502).end(JSON.stringify({ error: String(error) }));
+      respond(res, 502, JSON.stringify({ error: String(error) }));
     }
   });
 }
