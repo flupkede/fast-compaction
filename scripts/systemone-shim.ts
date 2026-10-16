@@ -48,6 +48,26 @@ export function toAnswers(questions: JevQuestions, reply: unknown): JevResponse 
   return { answers };
 }
 
+/** Judge timing from an ollama chat response; undefined when it reports none. */
+export function judgeMetrics(data: Record<string, unknown>): JevResponse['judge'] {
+  const ms = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.round(value / 1e6) : undefined;
+  const count = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  const timing: NonNullable<JevResponse['judge']> = {};
+  const loadMs = ms(data.load_duration);
+  if (loadMs !== undefined) timing.loadMs = loadMs;
+  const promptMs = ms(data.prompt_eval_duration);
+  if (promptMs !== undefined) timing.promptMs = promptMs;
+  const promptTokens = count(data.prompt_eval_count);
+  if (promptTokens !== undefined) timing.promptTokens = promptTokens;
+  const genMs = ms(data.eval_duration);
+  if (genMs !== undefined) timing.genMs = genMs;
+  const genTokens = count(data.eval_count);
+  if (genTokens !== undefined) timing.genTokens = genTokens;
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -105,8 +125,12 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
         respond(res, 502, JSON.stringify({ error: `ollama: ${await upstream.text()}` }));
         return;
       }
-      const reply = (await upstream.json() as { message?: { content?: string } }).message?.content ?? '';
-      respond(res, 200, JSON.stringify(toAnswers(body.questions, extractJson(reply))));
+      const data = (await upstream.json()) as { message?: { content?: string } } & Record<string, unknown>;
+      const reply = data.message?.content ?? '';
+      const judge = judgeMetrics(data);
+      const payload: Record<string, unknown> = { ...toAnswers(body.questions, extractJson(reply)) };
+      if (judge) payload.judge = judge;
+      respond(res, 200, JSON.stringify(payload));
     } catch (error) {
       respond(res, 502, JSON.stringify({ error: String(error) }));
     }

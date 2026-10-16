@@ -376,6 +376,32 @@ describe('compact', () => {
     expect(reductionRatio(output)).toBeGreaterThan(0);
   });
 
+  it('sums judge-reported timing across all requests into stats.judge', async () => {
+    const messages = transcript();
+    let calls = 0;
+    const judgeAsker: JevAsker = {
+      async ask(state, questions: JevQuestions) {
+        calls += 1;
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+          judge: { loadMs: calls === 1 ? 7000 : 0, promptMs: 900, promptTokens: 3000, genMs: 3000, genTokens: 250 },
+        };
+      },
+    };
+    const output = await compact(messages, judgeAsker, { preserveRecentMessages: 1 });
+    expect(calls).toBeGreaterThan(1);
+    expect(output.stats.judge).toEqual({
+      requests: calls,
+      loadMs: 7000,
+      promptMs: 900 * calls,
+      promptTokens: 3000 * calls,
+      genMs: 3000 * calls,
+      genTokens: 250 * calls,
+    });
+  });
+
   it('judges conversation messages and drops the prose of the droppable ones', async () => {
     const seen: Seen[] = [];
     const messages = [

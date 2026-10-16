@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { createShimServer, extractJson, toAnswers } from '../scripts/systemone-shim.js';
+import { createShimServer, extractJson, judgeMetrics, toAnswers } from '../scripts/systemone-shim.js';
 import type { AddressInfo } from 'node:net';
+
+describe('judgeMetrics', () => {
+  it('maps ollama eval metrics onto ms/token fields', () => {
+    expect(judgeMetrics({
+      load_duration: 7_360_000_000,
+      prompt_eval_duration: 930_123_456,
+      prompt_eval_count: 3102,
+      eval_duration: 3_310_000_000,
+      eval_count: 266,
+    })).toEqual({ loadMs: 7360, promptMs: 930, promptTokens: 3102, genMs: 3310, genTokens: 266 });
+  });
+  it('keeps partial metrics and omits missing ones', () => {
+    expect(judgeMetrics({ eval_duration: 800_000_000 })).toEqual({ genMs: 800 });
+  });
+  it('returns undefined when nothing is reported', () => {
+    expect(judgeMetrics({})).toBeUndefined();
+    expect(judgeMetrics({ total_duration: 'nonsense' })).toBeUndefined();
+  });
+});
 
 describe('extractJson', () => {
   it('parses plain JSON', () => {
@@ -62,6 +81,56 @@ describe('createShimServer', () => {
         questions: { call_1: { type: 'noul', instructions: 'i' } },
         keepThreshold: 0.5,
       });
+    } finally {
+      server.close();
+    }
+  });
+
+  it('forwards judge timing when the upstream reports it', async () => {
+    const fetcher = (async () => ({
+      ok: true,
+      json: async () => ({
+        message: { content: '{"call_1":{"noul":0.9}}' },
+        load_duration: 7_360_000_000,
+        prompt_eval_duration: 900_000_000,
+        prompt_eval_count: 3000,
+        eval_duration: 3_000_000_000,
+        eval_count: 250,
+      }),
+    })) as unknown as typeof fetch;
+    const server = createShimServer({ port: 0 }, fetcher);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/systemone`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: 's', questions: { call_1: { type: 'noul', instructions: 'i' } } }),
+      });
+      expect(await response.json()).toEqual({
+        answers: { call_1: { type: 'noul', noul: 0.9 } },
+        judge: { loadMs: 7360, promptMs: 900, promptTokens: 3000, genMs: 3000, genTokens: 250 },
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it('omits the judge field when the upstream reports no timing', async () => {
+    const fetcher = (async () => ({
+      ok: true,
+      json: async () => ({ message: { content: '{"call_1":{"noul":0.9}}' } }),
+    })) as unknown as typeof fetch;
+    const server = createShimServer({ port: 0 }, fetcher);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/systemone`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: 's', questions: { call_1: { type: 'noul', instructions: 'i' } } }),
+      });
+      expect(await response.json()).toEqual({ answers: { call_1: { type: 'noul', noul: 0.9 } } });
     } finally {
       server.close();
     }

@@ -116,7 +116,9 @@ them. The
 ledger lives in the plugin's `$.store`, one key per session (the 200 most
 recently active are kept), written from `turn.complete` (main and subagent
 token usage, Claude Code's cost) and `session.compact` (Jev or fallback,
-reduction, duration).
+reduction, duration). Against a shim-backed local judge it also shows where
+the time goes per compaction: model load + prefill + generation, averaged
+over the Jev compactions that reported it.
 
 `/compress` triggers fast-compaction immediately — useful where the host's
 compact button bypasses plugin hooks, e.g. Zed's SDK runtime.

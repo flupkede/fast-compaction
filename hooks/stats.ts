@@ -15,6 +15,15 @@ export type UsageTotals = {
 
 export type CompactionOutcome = 'jev' | 'fallback-low' | 'fallback-error';
 
+/** Judge-reported timing sums for one compaction (from a shim in front of ollama). */
+export type JudgeSplit = {
+  loadMs: number;
+  promptMs: number;
+  promptTokens: number;
+  genMs: number;
+  genTokens: number;
+};
+
 export type CompactionRecord = {
   at: number;
   outcome: CompactionOutcome;
@@ -22,6 +31,10 @@ export type CompactionRecord = {
   tokensDropped?: number;
   ratio?: number;
   ms?: number;
+  /** System One requests the compaction made. */
+  requests?: number;
+  /** Judge timing when the endpoint reported it (summed over the compaction's requests). */
+  judge?: JudgeSplit;
   reason?: string;
   /** A subagent's own transcript: counted, but it never moves the main loop's credited drop. */
   agent?: boolean;
@@ -36,6 +49,13 @@ export type SessionStats = {
   costUsd: number;
   compactions: Record<CompactionOutcome, number>;
   jevMs: number;
+  /** Judge timing summed over every Jev compaction that reported it. */
+  jevRequests: number;
+  jevLoadMs: number;
+  jevPromptMs: number;
+  jevPromptTokens: number;
+  jevGenMs: number;
+  jevGenTokens: number;
   droppedTokens: number;
   savedTokens: number;
   /** Tokens the latest Jev compaction removed; each later main-loop API call is credited with them until the next compaction. */
@@ -82,6 +102,12 @@ export function emptySession(id: string, now: number): SessionStats {
     costUsd: 0,
     compactions: { jev: 0, 'fallback-low': 0, 'fallback-error': 0 },
     jevMs: 0,
+    jevRequests: 0,
+    jevLoadMs: 0,
+    jevPromptMs: 0,
+    jevPromptTokens: 0,
+    jevGenMs: 0,
+    jevGenTokens: 0,
     droppedTokens: 0,
     savedTokens: 0,
     activeDrop: 0,
@@ -156,7 +182,15 @@ export function recordTurn(stats: SessionStats, turn: TurnSample): SessionStats 
 export function recordCompaction(stats: SessionStats, record: CompactionRecord): SessionStats {
   stats.lastAt = record.at;
   stats.compactions[record.outcome] += 1;
-  if (record.outcome === 'jev') stats.jevMs += record.ms ?? 0;
+  if (record.outcome === 'jev') {
+    stats.jevMs += record.ms ?? 0;
+    stats.jevRequests += record.requests ?? 0;
+    stats.jevLoadMs += record.judge?.loadMs ?? 0;
+    stats.jevPromptMs += record.judge?.promptMs ?? 0;
+    stats.jevPromptTokens += record.judge?.promptTokens ?? 0;
+    stats.jevGenMs += record.judge?.genMs ?? 0;
+    stats.jevGenTokens += record.judge?.genTokens ?? 0;
+  }
   if (!record.agent) {
     const dropped = record.outcome === 'jev' ? (record.tokensDropped ?? 0) : 0;
     stats.droppedTokens += dropped;
@@ -204,6 +238,12 @@ export function aggregate(sessions: readonly SessionStats[]): SessionStats {
       total.compactions[key] += s.compactions[key];
     }
     total.jevMs += s.jevMs;
+    total.jevRequests += s.jevRequests;
+    total.jevLoadMs += s.jevLoadMs;
+    total.jevPromptMs += s.jevPromptMs;
+    total.jevPromptTokens += s.jevPromptTokens;
+    total.jevGenMs += s.jevGenMs;
+    total.jevGenTokens += s.jevGenTokens;
     total.droppedTokens += s.droppedTokens;
     total.savedTokens += s.savedTokens;
     total.recent.push(...s.recent);
@@ -229,7 +269,22 @@ function recordLine(r: CompactionRecord): string {
       : '';
   const ratio = r.ratio !== undefined ? `${Math.round(r.ratio * 100)}%` : '';
   const ms = r.ms !== undefined ? `${r.ms} ms` : '';
-  return [stamp(r.at), r.outcome.padEnd(14), size, ratio, ms, r.reason ?? ''].filter(Boolean).join('  ');
+  const req = r.requests !== undefined ? `${r.requests} req` : '';
+  return [stamp(r.at), r.outcome.padEnd(14), size, ratio, ms, req, r.reason ?? ''].filter(Boolean).join('  ');
+}
+
+/** `avg load + prefill (tokens) + gen (tokens)` when any judge timing was reported. */
+function timingLine(stats: SessionStats, jevCount: number): string | undefined {
+  const hasJudge =
+    stats.jevPromptMs > 0 || stats.jevGenMs > 0 || stats.jevLoadMs > 0 || stats.jevRequests > 0;
+  if (!hasJudge || jevCount === 0) return undefined;
+  const parts = [
+    `load ${Math.round(stats.jevLoadMs / jevCount)} ms`,
+    `prefill ${Math.round(stats.jevPromptMs / jevCount)} ms (${formatTokens(stats.jevPromptTokens / jevCount)} tok)`,
+    `gen ${Math.round(stats.jevGenMs / jevCount)} ms (${formatTokens(stats.jevGenTokens / jevCount)} tok)`,
+  ];
+  if (stats.jevRequests > 0) parts.push(`${(stats.jevRequests / jevCount).toFixed(1)} req/compaction`);
+  return `Timing       avg per Jev compaction: ${parts.join(' + ')}`;
 }
 
 export function formatReport(stats: SessionStats, scope: string, sessionCount: number, recent = 5): string {
@@ -250,6 +305,8 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
     `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} tokens at input price (estimate)`,
     `Cost         $${stats.costUsd.toFixed(2)} · ${u.turns} turns · avg ${avgContext} context per turn · cache hit ${hit}`,
   ];
+  const timing = timingLine(stats, c.jev);
+  if (timing) lines.push(timing);
   const last = stats.recent.slice(-recent);
   if (last.length > 0) lines.push('', 'Recent', ...last.map(recordLine));
   return lines.join('\n');

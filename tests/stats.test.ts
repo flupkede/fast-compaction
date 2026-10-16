@@ -99,6 +99,27 @@ describe('stats', () => {
     expect(report).toContain('1 turns · avg 100K context per turn · cache hit 99.0%');
     expect(report).toContain('$1.25');
     expect(report).toContain('167K → 100K  40%  600 ms');
+    expect(report).not.toContain('Timing');
+  });
+
+  it('reports the judge timing split when requests carried it', () => {
+    const s = emptySession('a', 0);
+    recordCompaction(s, {
+      at: 1, outcome: 'jev', ms: 12_340, requests: 3,
+      judge: { loadMs: 7_000, promptMs: 900, promptTokens: 6_000, genMs: 3_500, genTokens: 500 },
+    });
+    recordCompaction(s, {
+      at: 2, outcome: 'jev', ms: 4_500, requests: 1,
+      judge: { loadMs: 0, promptMs: 600, promptTokens: 4_000, genMs: 3_500, genTokens: 500 },
+    });
+    const total = aggregate([s]);
+    expect(total.jevRequests).toBe(4);
+    expect(total.jevPromptTokens).toBe(10_000);
+    const report = formatReport(total, 'all sessions', 1);
+    expect(report).toContain(
+      'Timing       avg per Jev compaction: load 3500 ms + prefill 750 ms (5K tok) + gen 3500 ms (500 tok) + 2.0 req/compaction',
+    );
+    expect(report).toContain('3 req');
   });
 
   it('formats an empty report without failing', () => {

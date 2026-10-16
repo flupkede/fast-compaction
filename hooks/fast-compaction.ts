@@ -630,6 +630,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
       );
       const record: Omit<CompactionRecord, 'at'> = { outcome: 'jev', ratio, ms: result.stats.ms, agent };
       if (tokensBefore !== undefined) record.tokensBefore = tokensBefore;
+      if (result.stats.requests > 0) record.requests = result.stats.requests;
+      if (result.stats.judge) record.judge = result.stats.judge;
       const dropped = droppedTokens(tokensBefore, ratio);
       if (dropped !== undefined) record.tokensDropped = dropped;
       logCompaction($, record);

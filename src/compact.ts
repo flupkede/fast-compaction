@@ -11,6 +11,7 @@ import type {
   HistoryEntry,
   JevAsker,
   JevQuestions,
+  JudgeTiming,
   Message,
   MessageDecision,
   ResolvedCompactOptions,
@@ -196,13 +197,29 @@ export function decideMessage(
   return { ...base, keep, reason: keep ? 'kept' : 'dropped' };
 }
 
+function sumJudge(total: CompactResult['stats']['judge'], timing: JudgeTiming | undefined): CompactResult['stats']['judge'] {
+  if (!timing) return total;
+  const next = total ?? { requests: 0, loadMs: 0, promptMs: 0, promptTokens: 0, genMs: 0, genTokens: 0 };
+  return {
+    requests: next.requests + 1,
+    loadMs: next.loadMs + (timing.loadMs ?? 0),
+    promptMs: next.promptMs + (timing.promptMs ?? 0),
+    promptTokens: next.promptTokens + (timing.promptTokens ?? 0),
+    genMs: next.genMs + (timing.genMs ?? 0),
+    genTokens: next.genTokens + (timing.genTokens ?? 0),
+  };
+}
+
 async function askBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly ToolCall[],
+  judge: JudgeTiming[] = [],
 ): Promise<Map<string, CallAnswer>> {
   const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
-  const { answers } = await asker.ask(state, questions);
+  const response = await asker.ask(state, questions);
+  judge.push(response.judge ?? {});
+  const { answers } = response;
   return new Map(
     batch.map((call) => [
       call.id,
@@ -219,9 +236,12 @@ async function askMessageBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly HistoryEntry[],
+  judge: JudgeTiming[] = [],
 ): Promise<Map<number, number>> {
   const questions: JevQuestions = Object.assign({}, ...batch.map(questionForEntry));
-  const { answers } = await asker.ask(state, questions);
+  const response = await asker.ask(state, questions);
+  judge.push(response.judge ?? {});
+  const { answers } = response;
   return new Map(
     batch.flatMap((entry) => {
       const answer = answers[`msg_${entry.i}`];
@@ -470,6 +490,7 @@ export async function compact(
 
   let fitted: FittedState | undefined;
   let batches: ToolCall[][] = [];
+  let callJudge: JudgeTiming[] = [];
   const answers = new Map<string, CallAnswer>();
   const messageAnswers = new Map<number, number>();
   let proseEntries: HistoryEntry[] = [];
@@ -480,12 +501,14 @@ export async function compact(
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
+    const judgeTimings: JudgeTiming[] = [];
     const answeredCall = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+      batches.map((batch) => askBatch(asker, state.state, batch, judgeTimings)),
     );
     for (const map of answeredCall) {
       for (const [id, answer] of map) answers.set(id as string, answer as CallAnswer);
     }
+    callJudge = judgeTimings;
   }
   // prose entries present in the fitted state, outside the protected window
   if (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0)) {
@@ -499,7 +522,7 @@ export async function compact(
       messageChunkSize(fitted.tokens, resolved.maxRequestTokens),
     );
     for (const batch of messageChunks) {
-      const map = await askMessageBatch(asker, fitted.state, batch);
+      const map = await askMessageBatch(asker, fitted.state, batch, callJudge);
       for (const [i, noul] of map) messageAnswers.set(i, noul);
     }
   }
@@ -566,6 +589,9 @@ export async function compact(
     }
   }
 
+  let judge: CompactResult['stats']['judge'];
+  for (const timing of callJudge) judge = sumJudge(judge, timing);
+
   return {
     messages: kept,
     decisions,
@@ -592,6 +618,7 @@ export async function compact(
             messageChunkSize((fitted ?? EMPTY_FITTED).tokens, resolved.maxRequestTokens),
         ),
       ms: Date.now() - started,
+      judge,
     },
   };
 }

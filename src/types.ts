@@ -174,6 +174,15 @@ export interface CompactResult {
     stateStage: string;
     requests: number;
     ms: number;
+    /** Summed judge-reported timing over the requests that carried it (ollama behind a shim). */
+    judge?: {
+      requests: number;
+      loadMs: number;
+      promptMs: number;
+      promptTokens: number;
+      genMs: number;
+      genTokens: number;
+    };
   };
 }
 
@@ -266,6 +275,15 @@ export interface ScoreAnswer {
 
 export type JevAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
 
+/** Local-judge timing one request's shim reported back (ollama eval metrics, ms rounded). */
+export interface JudgeTiming {
+  loadMs?: number;
+  promptTokens?: number;
+  promptMs?: number;
+  genTokens?: number;
+  genMs?: number;
+}
+
 export interface JevResponse {
   model?: string;
   answers: Record<string, JevAnswer>;
@@ -273,6 +291,8 @@ export interface JevResponse {
     input_tokens?: number;
     output_tokens?: number;
   };
+  /** Present when the endpoint is a shim in front of an ollama judge. */
+  judge?: JudgeTiming;
   [key: string]: unknown;
 }
 
