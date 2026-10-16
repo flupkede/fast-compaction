@@ -54,7 +54,7 @@ describe('createShimServer', () => {
       expect(await response.json()).toEqual({ answers: { call_1: { type: 'noul', noul: 0.9 } } });
       expect(captured?.url).toBe('http://127.0.0.1:11434/api/chat');
       const sent = JSON.parse(captured!.body);
-      expect(sent.model).toBe('student');
+      expect(sent.model).toBe('fast-compaction');
       expect(sent.stream).toBe(false);
       expect(sent.messages[0].role).toBe('system');
       expect(JSON.parse(sent.messages[1].content)).toEqual({

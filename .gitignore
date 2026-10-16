@@ -6,3 +6,4 @@ demo/JevDemo/build
 # Hidden directories (at any level) — tool-generated, never commit
 .*/
 **/.*/
+scripts/__pycache__/
