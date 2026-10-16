@@ -18,6 +18,8 @@ export interface ShimOptions {
   ollamaUrl: string;
   model: string;
   numCtx: number;
+  /** ollama keep_alive for the judge model (e.g. '30m', '1h'); unset = server default (5m). */
+  keepAlive?: string;
 }
 
 const DEFAULTS: ShimOptions = {
@@ -118,6 +120,7 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
           model,
           messages,
           stream: false,
+          ...(config.keepAlive ? { keep_alive: config.keepAlive } : {}),
           options: { temperature: 0, num_ctx: config.numCtx },
         }),
       });
@@ -147,7 +150,8 @@ if (process.argv[1] && process.argv[1].endsWith('systemone-shim.ts')) {
   const ollamaUrl = stringFlag('ollama') ?? DEFAULTS.ollamaUrl;
   const model = stringFlag('model') ?? process.env.OLLAMA_MODEL ?? DEFAULTS.model;
   const numCtx = Number(stringFlag('num-ctx') ?? DEFAULTS.numCtx);
-  createShimServer({ port, ollamaUrl, model, numCtx }).listen(port, () => {
-    console.log(`systemone-shim: listening on :${port}, ollama ${ollamaUrl}, model ${model}, num_ctx ${numCtx}`);
+  const keepAlive = stringFlag('keep-alive');
+  createShimServer({ port, ollamaUrl, model, numCtx, keepAlive }).listen(port, () => {
+    console.log(`systemone-shim: listening on :${port}, ollama ${ollamaUrl}, model ${model}, num_ctx ${numCtx}${keepAlive ? `, keep_alive ${keepAlive}` : ''}`);
   });
 }

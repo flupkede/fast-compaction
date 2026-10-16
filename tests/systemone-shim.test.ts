@@ -135,4 +135,31 @@ describe('createShimServer', () => {
       server.close();
     }
   });
+
+  it('sends keep_alive only when configured', async () => {
+    const bodies: string[] = [];
+    const fetcher = (async (url: unknown, init?: { body?: string }) => {
+      bodies.push(init?.body ?? '');
+      return {
+        ok: true,
+        json: async () => ({ message: { content: '{"call_1":{"noul":0.9}}' } }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    for (const options of [{ port: 0 }, { port: 0, keepAlive: '1h' }]) {
+      const server = createShimServer(options, fetcher);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as AddressInfo).port;
+      try {
+        await fetch(`http://127.0.0.1:${port}/v1/systemone`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ state: 's', questions: { call_1: { type: 'noul', instructions: 'i' } } }),
+        });
+      } finally {
+        server.close();
+      }
+    }
+    expect(JSON.parse(bodies[0]).keep_alive).toBeUndefined();
+    expect(JSON.parse(bodies[1]).keep_alive).toBe('1h');
+  });
 });
