@@ -51,10 +51,6 @@ const HOOK_DEFAULTS = {
   ollamaTimeoutMs: 600_000,
 };
 
-/** How long after a turn the deferred compaction waits, and how often it retries. */
-const DEFER_MS = 1_000;
-const DEFER_ATTEMPTS = 5;
-
 export type HookFetchInit = {
   method?: string;
   headers?: Record<string, string>;
@@ -307,29 +303,6 @@ export function withDeadline<T>(
   return Promise.race([work, deadline]);
 }
 
-/**
- * Compacts once the turn has ended. `$.session.compact()` rejects while a turn
- * runs, and a `turn.complete` hook is still part of its turn, so it is never
- * awaited there; it retries a few times in case the next turn already started.
- */
-export async function deferredCompact(
-  compactFn: () => Promise<unknown>,
-  sleep: (ms: number) => Promise<void>,
-  log: (text: string) => void,
-): Promise<void> {
-  let last: unknown;
-  for (let attempt = 0; attempt < DEFER_ATTEMPTS; attempt++) {
-    await sleep(DEFER_MS);
-    try {
-      await compactFn();
-      return;
-    } catch (error) {
-      last = error;
-    }
-  }
-  log(`auto-compact skipped (${last instanceof Error ? last.message : String(last)})`);
-}
-
 function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
@@ -508,11 +481,12 @@ function logCompaction($: StatsHost, record: Omit<CompactionRecord, 'at'>): void
 
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
-  let compacting = false;
-  // /compress cannot call $.session.compact() inside its own command.run hook
-  // (host check: it would compact under the turn the hook is holding); the flag
-  // makes the next turn.complete run one regardless of the percent threshold.
-  let forceCompact = false;
+  // The host rejects $.session.compact() while a turn runs, and a hook
+  // invocation's budget dies after ~2 min — a retry loop inside one
+  // turn.complete starves and the compaction is lost mid-flight. Instead:
+  // attempt once per turn.complete and re-arm on rejection; the next turn's
+  // end is a fresh invocation with a fresh budget.
+  let pendingCompact: 'force' | 'auto' | null = null;
 
   on('session.start', async ($, event, next) => {
     try {
@@ -543,7 +517,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   // Thin on purpose: the host refuses a nested $.session.compact() inside a
   // command.run hook; turn.complete runs it right after this turn instead.
   on('command.run', { command: COMPRESS_COMMAND }, async () => {
-    forceCompact = true;
+    pendingCompact = 'force';
     return { text: 'compaction queued — it runs right after this turn' };
   });
 
@@ -630,8 +604,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     const answer = await next(event);
-    const forced = forceCompact;
-    forceCompact = false;
+    let trigger = pendingCompact;
+    pendingCompact = null;
     let context: { tokens?: number; percent?: number } = {};
     try {
       const usage = await $.session.usage();
@@ -642,21 +616,22 @@ export const register: Register = (on: On, options: PluginOptions) => {
       if (usage.cost) sample.costUsd = usage.cost.usd;
       withStats($, (stats, at) => void recordTurn(stats, { ...sample, at }));
     } catch (error) {
-      if (!forced) {
+      if (!trigger) {
         $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
         return answer;
       }
     }
-    if (compacting) return answer;
-    if (!forced && (context.percent ?? 0) < configured.compactAtPercent) return answer;
-    compacting = true;
-    void deferredCompact(
-      () => $.session.compact(),
-      (ms) => $.clock.sleep(ms),
-      (text) => $.ui.log(text),
-    ).finally(() => {
-      compacting = false;
-    });
+    if (!trigger && (context.percent ?? 0) < configured.compactAtPercent) return answer;
+    if (!trigger) trigger = 'auto';
+    try {
+      await $.session.compact();
+    } catch (error) {
+      // re-arm: the next turn's end retries with a fresh invocation budget
+      pendingCompact = trigger;
+      $.ui.log(
+        `compaction deferred to the next turn (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
     return answer;
   });
 };

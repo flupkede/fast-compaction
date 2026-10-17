@@ -4,7 +4,6 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
-  deferredCompact,
   nextFloorPercent,
   register,
   resolveHookConfig,
@@ -158,35 +157,6 @@ describe('withDeadline', () => {
   });
 });
 
-describe('deferredCompact', () => {
-  it('retries while a turn still runs, then compacts', async () => {
-    let calls = 0;
-    const logs: string[] = [];
-    await deferredCompact(
-      async () => {
-        calls += 1;
-        if (calls < 3) throw new Error('turn running');
-      },
-      async () => {},
-      (text) => logs.push(text),
-    );
-    expect(calls).toBe(3);
-    expect(logs).toEqual([]);
-  });
-
-  it('gives up after its attempts and logs why', async () => {
-    const logs: string[] = [];
-    await deferredCompact(
-      async () => {
-        throw new Error('turn running');
-      },
-      async () => {},
-      (text) => logs.push(text),
-    );
-    expect(logs).toEqual(['auto-compact skipped (turn running)']);
-  });
-});
-
 describe('slash commands', () => {
   type HookEntry = {
     pattern: unknown;
@@ -290,6 +260,36 @@ describe('slash commands', () => {
       (event: unknown) => event,
     );
     expect(calls).toBe(0);
+  });
+
+  it('a rejected attempt re-arms and the next turn.complete retries below the threshold', async () => {
+    const turn = registeredHooks().find((e) => e.pattern === 'turn.complete')!;
+    let calls = 0;
+    let reject = true;
+    let percent = 90;
+    const logs: string[] = [];
+    const $ = {
+      session: {
+        usage: async () => ({ context: { tokens: 1000, percent } }),
+        compact: async () => {
+          if (reject) throw new Error('a turn is running');
+          calls += 1;
+          return { messages: [] };
+        },
+      },
+      clock: { now: async () => 0, sleep: async () => {} },
+      store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+      ui: { log: (text: string) => void logs.push(text) },
+    };
+    // first turn: above threshold, but the host rejects — must re-arm, not die
+    await turn.hook($, { agentId: undefined }, (event: unknown) => event);
+    expect(calls).toBe(0);
+    expect(logs).toEqual(['compaction deferred to the next turn (a turn is running)']);
+    // second turn: below threshold, but the re-armed trigger compacts anyway
+    reject = false;
+    percent = 5;
+    await turn.hook($, { agentId: undefined }, (event: unknown) => event);
+    expect(calls).toBe(1);
   });
 });
 

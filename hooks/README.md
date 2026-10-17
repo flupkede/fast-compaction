@@ -94,8 +94,11 @@ built-in compaction. The outcome is shown as a toast and logged with the
 reduction, per-reason counts, state size and request count; a per-call
 `decisions:` line with both probabilities is logged for diagnosis. The
 `turn.complete` hook lets the turn finish first, then, when `context.percent`
-reached `compactAtPercent`, requests compaction in the background (retrying
-while a new turn is running), with an in-flight guard.
+reached `compactAtPercent`, requests compaction. The host rejects
+`$.session.compact()` while a turn runs and a hook invocation's budget dies
+after ~2 min, so the hook attempts once per turn end and re-arms on rejection —
+the next turn's end retries with a fresh budget instead of starving inside one
+invocation. `/compress` queues the same attempt past the percent threshold.
 
 ## Training data
 
