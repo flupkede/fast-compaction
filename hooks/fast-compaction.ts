@@ -509,6 +509,10 @@ function logCompaction($: StatsHost, record: Omit<CompactionRecord, 'at'>): void
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  // /compress cannot call $.session.compact() inside its own command.run hook
+  // (host check: it would compact under the turn the hook is holding); the flag
+  // makes the next turn.complete run one regardless of the percent threshold.
+  let forceCompact = false;
 
   on('session.start', async ($, event, next) => {
     try {
@@ -536,19 +540,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
     return { text: await statsCommand($, event.args, id, now) };
   });
 
-  // Thin on purpose: the session.compact hook the call dispatches does the work.
-  on('command.run', { command: COMPRESS_COMMAND }, async ($) => {
-    try {
-      const outcome = await $.session.compact();
-      return {
-        text:
-          outcome.skip !== undefined
-            ? `compaction skipped (${outcome.skip})`
-            : 'compaction done',
-      };
-    } catch (error) {
-      return { text: `compaction failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
+  // Thin on purpose: the host refuses a nested $.session.compact() inside a
+  // command.run hook; turn.complete runs it right after this turn instead.
+  on('command.run', { command: COMPRESS_COMMAND }, async () => {
+    forceCompact = true;
+    return { text: 'compaction queued — it runs right after this turn' };
   });
 
   on('session.compact', async ($, event, next) => {
@@ -634,7 +630,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     const answer = await next(event);
-    let context: { tokens?: number; percent?: number };
+    const forced = forceCompact;
+    forceCompact = false;
+    let context: { tokens?: number; percent?: number } = {};
     try {
       const usage = await $.session.usage();
       context = usage.context;
@@ -644,11 +642,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
       if (usage.cost) sample.costUsd = usage.cost.usd;
       withStats($, (stats, at) => void recordTurn(stats, { ...sample, at }));
     } catch (error) {
-      $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
-      return answer;
+      if (!forced) {
+        $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
+        return answer;
+      }
     }
     if (compacting) return answer;
-    if ((context.percent ?? 0) < configured.compactAtPercent) return answer;
+    if (!forced && (context.percent ?? 0) < configured.compactAtPercent) return answer;
     compacting = true;
     void deferredCompact(
       () => $.session.compact(),

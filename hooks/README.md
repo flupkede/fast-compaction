@@ -118,8 +118,9 @@ reduction, duration). Against a shim-backed local judge it also shows where
 the time goes per compaction: model load + prefill + generation, averaged
 over the Jev compactions that reported it.
 
-`/compress` triggers fast-compaction immediately — useful where the host's
-compact button bypasses plugin hooks, e.g. Zed's SDK runtime.
+`/compress` queues fast-compaction for right after the current turn — the host
+refuses a nested compaction inside a command hook, so the `turn.complete` hook
+runs it past the percent threshold.
 
 `Saved` credits each Jev drop (context before times character reduction) once
 per later main-loop API call until the next compaction, calls per turn

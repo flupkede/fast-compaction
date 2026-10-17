@@ -241,24 +241,55 @@ describe('slash commands', () => {
     expect(specs.map((spec) => spec.name)).toEqual([STATS_COMMAND, COMPRESS_COMMAND]);
   });
 
-  it('compress asks the engine to compact once and acks the outcome', async () => {
+  it('compress queues the compaction; the next turn.complete runs it past the threshold', async () => {
+    const hooks = registeredHooks();
+    const compress = hooks.find(
+      (e) => e.pattern === 'command.run' && e.matcher?.command === COMPRESS_COMMAND,
+    )!;
+    const turn = hooks.find((e) => e.pattern === 'turn.complete')!;
     let calls = 0;
-    const outcome = await runCompress(async () => {
-      calls += 1;
-      return { messages: [] };
-    });
+    const $ = {
+      session: {
+        usage: async () => ({ context: { tokens: 1000, percent: 5 } }),
+        compact: async () => {
+          calls += 1;
+          return { messages: [] };
+        },
+      },
+      clock: { now: async () => 0, sleep: async () => {} },
+      store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+      ui: { log: () => {} },
+    };
+    const queued = await compress.hook(
+      $,
+      { command: COMPRESS_COMMAND, args: '' },
+    );
+    expect(queued).toEqual({ text: 'compaction queued — it runs right after this turn' });
+    expect(calls).toBe(0);
+    await turn.hook($, { agentId: undefined }, (event: unknown) => event);
     expect(calls).toBe(1);
-    expect(outcome).toEqual({ text: 'compaction done' });
-    expect(await runCompress(async () => ({ skip: 'vetoed' }))).toEqual({
-      text: 'compaction skipped (vetoed)',
-    });
   });
 
-  it('compress surfaces a rejected compaction in its text', async () => {
-    const outcome = await runCompress(async () => {
-      throw new Error('a turn is running');
-    });
-    expect(outcome).toEqual({ text: 'compaction failed: a turn is running' });
+  it('turn.complete without the flag respects the percent threshold', async () => {
+    const turn = registeredHooks().find((e) => e.pattern === 'turn.complete')!;
+    let calls = 0;
+    await turn.hook(
+      {
+        session: {
+          usage: async () => ({ context: { tokens: 1000, percent: 5 } }),
+          compact: async () => {
+            calls += 1;
+            return { messages: [] };
+          },
+        },
+        clock: { now: async () => 0, sleep: async () => {} },
+        store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+        ui: { log: () => {} },
+      },
+      { agentId: undefined },
+      (event: unknown) => event,
+    );
+    expect(calls).toBe(0);
   });
 });
 
