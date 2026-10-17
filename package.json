@@ -28,7 +28,8 @@
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
-    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
+    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json",
+    "ship-plugin": "git push && claude plugin marketplace update fast-compaction && claude plugin update fast-compaction@fast-compaction"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
