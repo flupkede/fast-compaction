@@ -456,12 +456,13 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get(TYPESAFE_API_KEY_ENV);
+  // literal required by the hook sandbox (must match TYPESAFE_API_KEY_ENV in src/client.ts)
+  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
   if (fromEnv) return fromEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)[TYPESAFE_API_KEY_ENV];
+    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
     if (typeof value === 'string' && value) return value;
   }
   return undefined;
