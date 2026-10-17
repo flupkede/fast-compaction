@@ -11,7 +11,6 @@ import type {
 import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import { TYPESAFE_API_KEY_ENV } from '../src/client.js';
-import { createTrainingLogger } from '../src/training-log.js';
 import type {
   CompactOptions,
   CompactResult,
@@ -90,9 +89,6 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   baseUrl?: string;
   /** Raw `ollamaUrl` option; `baseUrl`'s fallback when `asker` is `ollama`. */
   ollamaUrl?: string;
-  /** Log one training record per Jev compaction to `trainingDir` (or its default). */
-  trainingLog: boolean;
-  trainingDir?: string;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -109,11 +105,6 @@ function rawNumber(options: PluginOptions, key: string): number | undefined {
 function optionString(options: PluginOptions, key: string): string | undefined {
   const value = options[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-function optionBoolean(options: PluginOptions, key: string, fallback: boolean): boolean {
-  const value = options[key];
-  return typeof value === 'boolean' ? value : fallback;
 }
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
@@ -164,14 +155,11 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     jevTimeoutMs:
       jevTimeoutMs ??
       (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.jevTimeoutMs),
-    trainingLog: optionBoolean(options, 'trainingLog', false),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
   if (goal) config.goal = goal;
-  const trainingDir = optionString(options, 'trainingDir');
-  if (trainingDir) config.trainingDir = trainingDir;
   if (askerOption) config.asker = asker;
   if (ollamaUrl) config.ollamaUrl = ollamaUrl;
   if (asker === 'ollama') {
@@ -293,10 +281,7 @@ export async function compactSession(
     );
   }
   const apiKey = config.apiKey ?? 'local';
-  const { trainingLog, trainingDir, ...rest } = config;
-  const options: CompactOptions = trainingLog
-    ? { ...rest, trainingLog: createTrainingLogger(trainingDir ? { dir: trainingDir } : {}) }
-    : rest;
+  const options: CompactOptions = config;
   const result = await compact(
     messages,
     jevAsker(fetchFn, apiKey, config.model, config.baseUrl),

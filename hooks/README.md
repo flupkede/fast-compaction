@@ -63,8 +63,6 @@ The plugin declares these `userConfig` values in
 | `model` | `jev-latest` |
 | `ollamaUrl` | `http://localhost:11434/v1/systemone` |
 | `jevTimeoutMs` | `8000` |
-| `trainingLog` | `false` |
-| `trainingDir` | `~/.fast-compaction/training` |
 
 `asker` picks the judge: `cloud` (default) asks the TypeSafe Jev API and needs
 the `apiKey`; `ollama` posts to the local Ollama System One endpoint
@@ -77,8 +75,8 @@ development setup.
 
 Every option except `apiKey`, `asker`, `compactAtPercent`, `minReductionRatio`,
 `targetFloorStartPercent`, `targetFloorMinPercent`,
-`targetFloorStepPercent`, `jevTimeoutMs`, `model`, `ollamaUrl`,
-`trainingLog` and `trainingDir` is passed straight to
+`targetFloorStepPercent`, `jevTimeoutMs`, `model` and `ollamaUrl` is passed
+straight to
 the library; see the root
 README for what they do. When the session reports its context window, the
 hook also gives the compaction a token target of
@@ -101,12 +99,12 @@ while a new turn is running), with an in-flight guard.
 
 ## Training data
 
-With `trainingLog: true`, every compaction that asks Jev appends one JSON line to
-`trainingDir` (`compactions-YYYY-MM.jsonl`): the redacted state Jev saw, the
-questions asked, Jev's probabilities and the applied decisions. The state is
-the same redacted payload that goes to the TypeSafe API — secrets are already
-scrubbed — and nothing is uploaded anywhere; it accumulates locally as labelled
-examples for a future locally trained judge model.
+The hook cannot collect training data: the plugin sandbox forbids `fs` access
+(both static and dynamic `import()` of `node:*`), so the old `trainingLog` /
+`trainingDir` hook options are gone. The library-level callback
+(`trainingLog: (record) => ...`) and `createTrainingLogger` remain available
+to scripts outside the sandbox — `npm run replay` uses them to write
+`compactions-YYYY-MM.jsonl` from stored session transcripts.
 
 ## Stats
 

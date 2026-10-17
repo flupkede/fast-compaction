@@ -11,7 +11,7 @@ import {
   type Message,
   type TrainingRecord,
 } from '../src/index.js';
-import { resolveHookConfig, compactSession } from '../hooks/fast-compaction.js';
+import { resolveHookConfig } from '../hooks/fast-compaction.js';
 
 function message(role: Message['role'], text: string, extra: Partial<Message> = {}): Message {
   return { role, text, toolUses: [], ...extra };
@@ -28,16 +28,6 @@ function transcript(): Message[] {
     message('user', '', { toolResults: [{ tool_use_id: 'tool-1', text: fileA }] }),
     message('assistant', 'looks fine'),
     message('user', 'go ahead'),
-  ];
-}
-
-function sessionTranscript(): Parameters<typeof compactSession>[0] {
-  return [
-    { role: 'user', text: 'Fix the failing test.', toolUses: [] },
-    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'tool-1', tool: 'Read', input: { file_path: 'src/a.ts' }, text: fileA }] },
-    { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 'tool-1', text: fileA, isError: false }] },
-    { role: 'assistant', text: 'looks fine', toolUses: [] },
-    { role: 'user', text: 'go ahead', toolUses: [] },
   ];
 }
 
@@ -157,36 +147,8 @@ describe('createTrainingLogger', () => {
 });
 
 describe('resolveHookConfig training options', () => {
-  it('reads the boolean flag and directory, defaulting the flag to false', () => {
-    expect(resolveHookConfig({}).trainingLog).toBe(false);
-    expect(resolveHookConfig({ trainingLog: true, trainingDir: '/tmp/jev' })).toMatchObject({
-      trainingLog: true,
-      trainingDir: '/tmp/jev',
-    });
-    expect(resolveHookConfig({ trainingLog: 'yes' }).trainingLog).toBe(false);
-  });
-});
-
-describe('compactSession training wiring', () => {
-  it('writes a record to disk only when the flag is on', async () => {
-    const dir = await tempDir();
-    const base = resolveHookConfig({ preserveRecentMessages: 0 });
-    const fetch = async (): Promise<{ status: number; ok: boolean; text: string }> => ({
-      status: 200,
-      ok: true,
-      text: JSON.stringify({ answers: { call_t1: { noul: 0.9 }, result_t1: { noul: 0.1 } } }),
-    });
-    const off = { ...base, apiKey: 'k', trainingLog: false, trainingDir: dir };
-    await compactSession(sessionTranscript(), off, fetch);
-    await expect(readFile(join(dir, `compactions-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).rejects.toThrow();
-
-    const on = { ...base, apiKey: 'k', trainingLog: true, trainingDir: dir };
-    const { result } = await compactSession(sessionTranscript(), on, fetch);
-    expect(result.stats.requests).toBe(2); // call batch + message batch
-    const lines = (await readFile(join(dir, `compactions-${new Date().toISOString().slice(0, 7)}.jsonl`), 'utf8')).trim().split('\n');
-    expect(lines).toHaveLength(1);
-    const record = JSON.parse(lines[0]!) as TrainingRecord;
-    expect(record.answers).toEqual({ t1: { keepCall: 0.9, keepResult: 0.1 } });
-    expect(record.keepThreshold).toBe(0.5);
+  it('no longer carries training options — the hook sandbox forbids fs access', () => {
+    expect('trainingLog' in resolveHookConfig({ trainingLog: true })).toBe(false);
+    expect('trainingDir' in resolveHookConfig({ trainingDir: '/tmp/jev' })).toBe(false);
   });
 });

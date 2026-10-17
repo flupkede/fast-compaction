@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -105,18 +105,6 @@
       "title": "Jev timeout (ms)",
       "description": "How long compaction waits for Jev before falling back to the built-in summary; keep it under the engine's hook budget.",
       "default": 8000
-    },
-    "trainingLog": {
-      "type": "boolean",
-      "title": "Log training data",
-      "description": "Append one local JSONL record whenever a compaction asks Jev (redacted state, questions, Jev's answers, decisions) for future model training. Data never leaves this machine.",
-      "default": false
-    },
-    "trainingDir": {
-      "type": "string",
-      "title": "Training data directory",
-      "description": "Where trainingLog writes its JSONL files. Defaults to ~/.fast-compaction/training.",
-      "default": ""
     }
   }
 }

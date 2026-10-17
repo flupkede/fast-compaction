@@ -67,7 +67,7 @@ describe('hook config', () => {
       targetFloorStepPercent: 5,
       model: 'jev-latest',
       jevTimeoutMs: 8000,
-      trainingLog: false,
+
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
@@ -83,7 +83,7 @@ describe('hook config', () => {
       targetFloorMinPercent: 25,
       targetFloorStepPercent: 5,
       jevTimeoutMs: 8000,
-      trainingLog: false,
+
     });
   });
 
@@ -98,7 +98,7 @@ describe('hook config', () => {
       baseUrl: 'http://localhost:11434/v1/systemone',
       model: 'clef-flash',
       jevTimeoutMs: 600000,
-      trainingLog: false,
+
     });
   });
 
