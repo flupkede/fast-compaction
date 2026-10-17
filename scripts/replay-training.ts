@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import {
   createTrainingLogger,
   DEFAULT_MODEL,
-  DEFAULT_TRAINING_DIR,
+  defaultTrainingDir,
   JevClient,
   listClaudeTranscriptFiles,
   loadClaudeTranscript,
@@ -32,7 +32,7 @@ import {
 const DEFAULTS = {
   claudeRoot: join(homedir(), '.claude', 'projects'),
   opencodeDb: join(homedir(), '.local', 'share', 'opencode', 'opencode.db'),
-  dir: DEFAULT_TRAINING_DIR,
+  dir: defaultTrainingDir(),
   delayMs: 500,
   minMessages: 8,
 };

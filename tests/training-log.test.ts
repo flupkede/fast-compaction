@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   compact,
   createTrainingLogger,
-  DEFAULT_TRAINING_DIR,
+  defaultTrainingDir,
   type JevAsker,
   type JevQuestions,
   type Message,
@@ -152,7 +152,7 @@ describe('createTrainingLogger', () => {
   });
 
   it('defaults the directory to ~/.fast-compaction/training', () => {
-    expect(DEFAULT_TRAINING_DIR).toMatch(/\.fast-compaction[/\\]training$/);
+    expect(defaultTrainingDir()).toMatch(/\.fast-compaction[/\\]training$/);
   });
 });
 
