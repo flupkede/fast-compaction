@@ -614,7 +614,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
       if (event.usage) sample.usage = event.usage;
       if (context.tokens !== undefined) sample.contextTokens = context.tokens;
       if (usage.cost) sample.costUsd = usage.cost.usd;
-      withStats($, (stats, at) => void recordTurn(stats, { ...sample, at }));
+      withStats($, (stats, at) => {
+        recordTurn(stats, { ...sample, at });
+        stats.lastPercent = context.percent;
+        stats.lastTokens = context.tokens;
+      });
     } catch (error) {
       if (!trigger) {
         $.ui.log(`auto-compact skipped (${error instanceof Error ? error.message : String(error)})`);
@@ -623,14 +627,19 @@ export const register: Register = (on: On, options: PluginOptions) => {
     }
     if (!trigger && (context.percent ?? 0) < configured.compactAtPercent) return answer;
     if (!trigger) trigger = 'auto';
+    withStats($, (stats) => {
+      stats.lastAttempt = `attempted (${trigger})`;
+    });
     try {
       await $.session.compact();
     } catch (error) {
       // re-arm: the next turn's end retries with a fresh invocation budget
       pendingCompact = trigger;
-      $.ui.log(
-        `compaction deferred to the next turn (${error instanceof Error ? error.message : String(error)})`,
-      );
+      const reason = error instanceof Error ? error.message : String(error);
+      withStats($, (stats) => {
+        stats.lastAttempt = `deferred: ${reason}`;
+      });
+      $.ui.log(`compaction deferred to the next turn (${reason})`);
     }
     return answer;
   });

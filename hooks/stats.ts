@@ -63,6 +63,10 @@ export type SessionStats = {
   recent: CompactionRecord[];
   /** Percentage of the context window the next compaction targets; undefined = no budget compaction yet, the configured start floor applies. */
   floorPercent?: number;
+  /** Diagnostics: the context reading at the last turn.complete, and the last compaction attempt's outcome. */
+  lastPercent?: number;
+  lastTokens?: number;
+  lastAttempt?: string;
 };
 
 export const STORE_PREFIX = 'session:';
