@@ -307,6 +307,35 @@ function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
+/**
+ * The window the host actually compacts at: the `autoCompactWindow` setting
+ * when set, else the model window from the usage reading. On models whose
+ * catalog window dwarfs the auto-compact window (1M-class), the model-window
+ * percent never reaches the trigger while the host compacts long before —
+ * tokens against the effective window is what tracks the host's behavior.
+ */
+async function effectiveWindow(
+  $: { settings: { read: () => Promise<Record<string, unknown>> } },
+  context: { tokens?: number; window?: number },
+): Promise<number | undefined> {
+  try {
+    const settings = await $.settings.read();
+    const raw = settings['autoCompactWindow'];
+    const n =
+      typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+        ? raw
+        : typeof raw === 'string' && /^\d+$/.test(raw)
+          ? Number(raw)
+          : undefined;
+    if (n !== undefined) return n;
+  } catch {
+    // fall through to the model window
+  }
+  return typeof context.window === 'number' && Number.isFinite(context.window) && context.window > 0
+    ? context.window
+    : undefined;
+}
+
 export function summarize(result: CompactResult): string {
   const { stats } = result;
   const parts = [
@@ -540,7 +569,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (windowTokens !== undefined) {
       try {
         floor = await currentFloorPercent($, configured);
-        targetTokens = Math.round((windowTokens * floor) / 100);
+        const effective = await effectiveWindow($, { tokens: tokensBefore, window: windowTokens });
+        targetTokens = Math.round(((effective ?? windowTokens) * floor) / 100);
       } catch {
         floor = undefined;
         targetTokens = undefined;
@@ -625,7 +655,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
         return answer;
       }
     }
-    if (!trigger && (context.percent ?? 0) < configured.compactAtPercent) return answer;
+    if (!trigger) {
+      const effective = await effectiveWindow($, context);
+      const overThreshold =
+        typeof context.tokens === 'number' && effective !== undefined
+          ? context.tokens >= (configured.compactAtPercent / 100) * effective
+          : (context.percent ?? 0) >= configured.compactAtPercent;
+      if (!overThreshold) return answer;
+    }
     if (!trigger) trigger = 'auto';
     withStats($, (stats) => {
       stats.lastAttempt = `attempted (${trigger})`;

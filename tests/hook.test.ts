@@ -291,6 +291,31 @@ describe('slash commands', () => {
     await turn.hook($, { agentId: undefined }, (event: unknown) => event);
     expect(calls).toBe(1);
   });
+
+  it('triggers on tokens against the autoCompactWindow, not the model window', async () => {
+    const turn = registeredHooks().find((e) => e.pattern === 'turn.complete')!;
+    let calls = 0;
+    await turn.hook(
+      {
+        session: {
+          usage: async () => ({ context: { tokens: 150000, window: 1000000, percent: 15 } }),
+          compact: async () => {
+            calls += 1;
+            return { messages: [] };
+          },
+        },
+        settings: { read: async () => ({ autoCompactWindow: 200000 }) },
+        clock: { now: async () => 0, sleep: async () => {} },
+        store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+        ui: { log: () => {} },
+      },
+      { agentId: undefined },
+      (event: unknown) => event,
+    );
+    // 150k of a 200k auto-compact window = 75% — the host compacts soon; the
+    // model-window percent (15% of 1M) must not keep the plugin idle.
+    expect(calls).toBe(1);
+  });
 });
 
 describe('session message mapping', () => {
