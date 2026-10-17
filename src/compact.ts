@@ -525,8 +525,11 @@ export async function compact(
       messageCandidates,
       messageChunkSize(fitted.tokens, resolved.maxRequestTokens),
     );
-    for (const batch of messageChunks) {
-      const map = await askMessageBatch(asker, fitted.state, batch, callJudge);
+    const fittedState = fitted.state;
+    const answeredMessages = await Promise.all(
+      messageChunks.map((batch) => askMessageBatch(asker, fittedState, batch, callJudge)),
+    );
+    for (const map of answeredMessages) {
       for (const [i, noul] of map) messageAnswers.set(i, noul);
     }
   }
