@@ -7,3 +7,7 @@ demo/JevDemo/build
 .*/
 **/.*/
 scripts/__pycache__/
+
+# plugin manifest is the product — exempt from the hidden-dir block
+!.claude-plugin/
+!.claude-plugin/**

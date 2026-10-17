@@ -245,10 +245,10 @@ describe('question batching', () => {
     expect(batchCalls(calls, 1000, options)).toHaveLength(1);
   });
 
-  it('caps a batch at 32 calls so a request never exceeds 64 questions', () => {
+  it('caps a batch at 12 calls so a request never exceeds 24 questions (engine 30s fetch abort)', () => {
     const many: ToolCall[] = Array.from({ length: 75 }, (_, i) => ({ ...calls[0]!, id: `t${i}` }));
     const batches = batchCalls(many, 1000, options);
-    expect(batches.map((b) => b.length)).toEqual([32, 32, 11]);
+    expect(batches.map((b) => b.length)).toEqual([12, 12, 12, 12, 12, 12, 3]);
     expect(batches.flat().map((c) => c.id)).toEqual(many.map((c) => c.id));
   });
 
