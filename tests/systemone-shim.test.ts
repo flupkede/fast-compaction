@@ -31,6 +31,25 @@ describe('extractJson', () => {
   it('throws without braces', () => {
     expect(() => extractJson('no json here')).toThrow();
   });
+  it('takes the first balanced object when the model echoes a second one', () => {
+    // observed live: first-brace-to-last-brace spanned both objects and failed
+    expect(extractJson('{"call_1":{"noul":0.8}}{"call_1":{"noul":0.8}}')).toEqual({
+      call_1: { noul: 0.8 },
+    });
+  });
+  it('ignores trailing prose containing braces', () => {
+    expect(extractJson('{"a":{"noul":0.3}} note: keep } nearby')).toEqual({ a: { noul: 0.3 } });
+  });
+  it('handles braces and escapes inside string values', () => {
+    expect(extractJson('{"a":"with \\" quote and } brace","b":{"noul":1}} tail }')).toEqual({
+      a: 'with " quote and } brace',
+      b: { noul: 1 },
+    });
+  });
+  it('throws only when no complete object exists', () => {
+    expect(extractJson('{"a":{"noul":0.3}} unclosed {"x":1')).toEqual({ a: { noul: 0.3 } });
+    expect(() => extractJson('{"x":1')).toThrow(/balanced/);
+  });
 });
 
 describe('toAnswers', () => {

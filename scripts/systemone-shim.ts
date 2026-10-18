@@ -26,16 +26,40 @@ const DEFAULTS: ShimOptions = {
   port: 11435,
   ollamaUrl: 'http://127.0.0.1:11434',
   model: 'fast-compaction',
-  numCtx: 24576,
+  numCtx: 32768,
 };
 
-/** Strips Qwen3 reasoning blocks and any prose around the first/last brace. */
+/** Strips Qwen3 reasoning blocks; parses the first *balanced* JSON object,
+ * ignoring whatever the model appended after it (observed live: an echoed
+ * second object made first-brace-to-last-brace span both and fail). */
 export function extractJson(text: string): unknown {
   const clean = text.replace(/<think>[\s\S]*?<\/think>/g, '');
   const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  if (start === -1 || end <= start) throw new Error('student reply has no JSON object');
-  return JSON.parse(clean.slice(start, end + 1));
+  if (start === -1) throw new Error('student reply has no JSON object');
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < clean.length; i += 1) {
+    const ch = clean[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth += 1;
+    else if (ch === '}' && (depth -= 1) === 0) {
+      return JSON.parse(clean.slice(start, i + 1));
+    }
+  }
+  throw new Error('student reply has no balanced JSON object');
 }
 
 /** Maps the student's reply onto every question id; missing/unparseable -> 0.5. */
@@ -126,7 +150,9 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
         }),
       });
       if (!upstream.ok) {
-        respond(res, 502, JSON.stringify({ error: `ollama: ${await upstream.text()}` }));
+        const detail = `ollama ${upstream.status}: ${(await upstream.text()).slice(0, 160)}`;
+        console.log(`${new Date().toISOString()} ${model} ERROR ${detail}`);
+        respond(res, 502, JSON.stringify({ error: detail }));
         return;
       }
       const data = (await upstream.json()) as { message?: { content?: string } } & Record<string, unknown>;
@@ -142,6 +168,7 @@ export function createShimServer(options: Partial<ShimOptions>, fetcher: typeof 
             : ''),
       );
     } catch (error) {
+      console.log(`${new Date().toISOString()} ERROR ${String(error).slice(0, 160)}`);
       respond(res, 502, JSON.stringify({ error: String(error) }));
     }
   });
