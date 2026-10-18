@@ -267,6 +267,10 @@ claude plugin install fast-compaction@fast-compaction
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
 …); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+Every option is re-read from `pluginConfigs` in your settings at each compaction
+event, so tuning applies to a running session without reloading the plugin; a
+reload (`/reload-plugins`, or restarting the agent) is only needed for plugin
+code updates.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
 `fast-compaction: kept N/M messages, no summary (…)` when the pruned history

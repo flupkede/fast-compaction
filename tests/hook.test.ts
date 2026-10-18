@@ -4,6 +4,7 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  hotOptions,
   nextFloorPercent,
   register,
   resolveHookConfig,
@@ -99,6 +100,30 @@ describe('hook config', () => {
       jevTimeoutMs: 600000,
 
     });
+  });
+
+  it('hotOptions prefers fresh pluginConfigs over register-time options', async () => {
+    const $ = {
+      settings: {
+        read: async () => ({
+          pluginConfigs: {
+            'fast-compaction@fast-compaction': { options: { keepThreshold: 0.55, maxQuestionsPerRequest: 24 } },
+          },
+        }),
+      },
+    };
+    const hot = await hotOptions($ as never, { keepThreshold: 0.5 });
+    expect(hot).toEqual({ keepThreshold: 0.55, maxQuestionsPerRequest: 24 });
+  });
+
+  it('hotOptions falls back to register-time options when settings lack the entry', async () => {
+    const fallback = { keepThreshold: 0.5 };
+    expect(await hotOptions({ settings: { read: async () => ({}) } } as never, fallback)).toBe(fallback);
+    expect(
+      await hotOptions({ settings: { read: async () => ({ pluginConfigs: { other: {} } }) } } as never, fallback),
+    ).toBe(fallback);
+    const throwing = { settings: { read: async () => { throw new Error('filtered'); } } };
+    expect(await hotOptions(throwing as never, fallback)).toBe(fallback);
   });
 
   it('lets explicit baseUrl, model and jevTimeoutMs win over the ollama defaults', () => {

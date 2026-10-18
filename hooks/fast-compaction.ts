@@ -472,6 +472,33 @@ async function getApiKey(
   return undefined;
 }
 
+/**
+ * Options re-read from `pluginConfigs` in the user settings at event time,
+ * so tuning applies without a plugin reload; the register-time options are
+ * the fallback when the settings read fails or carries no entry.
+ */
+export async function hotOptions(
+  $: { settings: { read: () => Promise<Readonly<Record<string, unknown>>> } },
+  fallback: PluginOptions,
+): Promise<PluginOptions> {
+  try {
+    const settings = await $.settings.read();
+    const configs = settings['pluginConfigs'];
+    if (configs && typeof configs === 'object') {
+      const entry = (configs as Record<string, unknown>)['fast-compaction@fast-compaction'];
+      if (entry && typeof entry === 'object') {
+        const hot = (entry as Record<string, unknown>)['options'];
+        if (hot && typeof hot === 'object' && Object.keys(hot).length > 0) {
+          return hot as PluginOptions;
+        }
+      }
+    }
+  } catch {
+    // older host or filtered read — register-time options stand
+  }
+  return fallback;
+}
+
 function notify(
   $: {
     ui: {
@@ -533,6 +560,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
         immediate: true,
       });
       await evictOldStats($, await $.clock.now());
+      const live = resolveHookConfig(await hotOptions($, options));
+      $.ui.log(
+        `fast-compaction live: keepThreshold ${live.keepThreshold}, ` +
+          `maxQuestionsPerRequest ${live.maxQuestionsPerRequest ?? 12}, ` +
+          `askConcurrency ${live.askConcurrency ?? 2}, ` +
+          `compactAtPercent ${live.compactAtPercent}, minReductionRatio ${live.minReductionRatio}`,
+      );
     } catch (error) {
       $.ui.log(`stats setup failed (${error instanceof Error ? error.message : String(error)})`);
     }
@@ -553,6 +587,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('session.compact', async ($, event, next) => {
+    // settings can change under a running session: resolve the knobs now,
+    // not at register time
+    const configured = resolveHookConfig(await hotOptions($, options));
     const agent = event.agentId !== undefined;
     let tokensBefore: number | undefined;
     let windowTokens: number | undefined;
@@ -635,6 +672,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   });
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
+    const configured = resolveHookConfig(await hotOptions($, options));
     const answer = await next(event);
     let trigger = pendingCompact;
     pendingCompact = null;
