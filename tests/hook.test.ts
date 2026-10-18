@@ -5,6 +5,7 @@ import {
   decisionLog,
   decisionLogLines,
   hotOptions,
+  hookTimeBudget,
   nextFloorPercent,
   register,
   resolveHookConfig,
@@ -124,6 +125,14 @@ describe('hook config', () => {
     ).toBe(fallback);
     const throwing = { settings: { read: async () => { throw new Error('filtered'); } } };
     expect(await hotOptions(throwing as never, fallback)).toBe(fallback);
+  });
+
+  it('derives the time budget from the judge deadline, engine-aware', () => {
+    expect(hookTimeBudget(100_000)).toBe(60_000);
+    // never past the engine's ~2min hook budget, even with a 10min timeout
+    expect(hookTimeBudget(600_000)).toBe(110_000);
+    // never below 30s of work
+    expect(hookTimeBudget(50_000)).toBe(30_000);
   });
 
   it('lets explicit baseUrl, model and jevTimeoutMs win over the ollama defaults', () => {

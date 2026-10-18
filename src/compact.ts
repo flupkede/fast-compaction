@@ -76,6 +76,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       typeof options.timeBudgetMs === 'number' && Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs >= 0
         ? options.timeBudgetMs
         : undefined,
+    tolerateRequestFailures: options.tolerateRequestFailures === true,
     truncateHeadChars: Math.max(
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
@@ -523,6 +524,14 @@ function stateFitOptions(resolved: ResolvedCompactOptions): ResolvedCompactOptio
   return ceiling === resolved.maxStateTokens ? resolved : { ...resolved, maxStateTokens: ceiling };
 }
 
+/** Request-level judge failures are transient (network, 5xx, the engine's 30s
+ * abort); parse-level failures mean the judge spoke nonsense and must throw. */
+const REQUEST_FAILURE = /judge request failed|fetch failed|aborted|timed? ?out/i;
+
+function isRequestFailure(error: unknown): boolean {
+  return error instanceof Error && REQUEST_FAILURE.test(error.message);
+}
+
 /**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
@@ -550,6 +559,7 @@ export async function compact(
   let batches: ToolCall[][] = [];
   let callJudge: JudgeTiming[] = [];
   let partial = false;
+  let batchErrors = 0;
   const answers = new Map<string, CallAnswer>();
   const messageAnswers = new Map<number, number>();
   let proseEntries: HistoryEntry[] = [];
@@ -574,7 +584,13 @@ export async function compact(
           partial = true;
           return Promise.resolve(new Map<string, CallAnswer>());
         }
-        return askBatch(asker, state.state, batch, judgeTimings);
+        // one dead batch must not kill the pass: its calls stay (conservative)
+        return askBatch(asker, state.state, batch, judgeTimings).catch((error: unknown) => {
+          if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
+          partial = true;
+          batchErrors += 1;
+          return new Map<string, CallAnswer>();
+        });
       },
     );
     for (const map of answeredCall) {
@@ -600,7 +616,18 @@ export async function compact(
     const answeredMessages = await pooled(
       messageChunks,
       resolved.askConcurrency,
-      (batch) => askMessageBatch(asker, fittedState, batch, callJudge),
+      (batch) => {
+        if (outOfTime()) {
+          partial = true;
+          return Promise.resolve(new Map<number, number>());
+        }
+        return askMessageBatch(asker, fittedState, batch, callJudge).catch((error: unknown) => {
+          if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
+          partial = true;
+          batchErrors += 1;
+          return new Map<number, number>();
+        });
+      },
     );
     for (const map of answeredMessages) {
       for (const [i, noul] of map) messageAnswers.set(i, noul);
@@ -695,6 +722,7 @@ export async function compact(
       requests: callJudge.length,
       ms: Date.now() - started,
       ...(partial ? { partial: true } : {}),
+      ...(batchErrors > 0 ? { batchErrors } : {}),
       judge,
     },
   };

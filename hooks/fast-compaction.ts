@@ -45,10 +45,6 @@ const HOOK_DEFAULTS = {
   targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
   jevTimeoutMs: 8_000,
-  // Piece-wise compaction: stop asking the judge in time so even a virgin
-  // fat window returns a partial result inside the engine's ~2min hook
-  // budget; the remainder is judged by the next compaction.
-  timeBudgetMs: 90_000,
   // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   ollamaModel: 'clef-flash',
@@ -521,6 +517,15 @@ export function knobSnapshot(config: Pick<HookConfig, (typeof KNOBS)[number]>): 
   return JSON.stringify(KNOBS.map((key) => config[key]));
 }
 
+/**
+ * Piece-wise compaction budget: the engine kills hooks at ~2 min and a batch
+ * can still run into the 30 s per-request fetch abort after the budget
+ * check — leave 40 s of slack under the judge deadline, capped at 110 s.
+ */
+export function hookTimeBudget(jevTimeoutMs: number): number {
+  return Math.max(30_000, Math.min(jevTimeoutMs - 40_000, 110_000));
+}
+
 function notify(
   $: {
     ui: {
@@ -648,7 +653,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
     };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      config.timeBudgetMs = config.timeBudgetMs ?? HOOK_DEFAULTS.timeBudgetMs;
+      config.timeBudgetMs = config.timeBudgetMs ?? hookTimeBudget(config.jevTimeoutMs);
+      // graceful partials: a transient batch failure keeps its candidates
+      // instead of discarding the whole pass
+      config.tolerateRequestFailures = true;
       if (targetTokens !== undefined) config.targetTokens = targetTokens;
       const { result, messages } = await withDeadline(
         compactSession(event.messages, config, async (url, init) => {

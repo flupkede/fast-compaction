@@ -527,6 +527,42 @@ describe('compact', () => {
     expect(output.stats.partial).toBeUndefined();
   });
 
+  it('survives a failing batch: its calls stay, the rest is still judged', async () => {
+    const messages = [
+      message('user', 'seed'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'),
+      result('tool-1', 'body'),
+      call('tool-2', 'Read', { file_path: 'src/b.ts' }, 'x'),
+      result('tool-2', 'body'),
+      call('tool-3', 'Read', { file_path: 'src/c.ts' }, 'x'),
+      result('tool-3', 'body'),
+      message('user', 'latest'),
+    ];
+    let asks = 0;
+    const asker: JevAsker = {
+      async ask(state, questions: JevQuestions) {
+        asks += 1;
+        if (asks === 2) throw new Error('judge request failed (502): boom');
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0 }]),
+          ),
+        };
+      },
+    };
+    const output = await compact(messages, asker, {
+      maxQuestionsPerRequest: 4, // forces multiple batches
+      preserveRecentMessages: 1,
+      tolerateRequestFailures: true,
+    });
+    expect(output.stats.batchErrors).toBe(1);
+    expect(output.stats.partial).toBe(true);
+    // batches 1 and 3 were judged and dropped their calls; batch 2 stayed
+    const actions = output.decisions.map((d) => d.action);
+    expect(actions).toContain('drop_call');
+    expect(actions).toContain('keep');
+  });
+
   it('judges pure-chat prose even with no tool calls at all', async () => {
     const seen: Seen[] = [];
     const messages = [

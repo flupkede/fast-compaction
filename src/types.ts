@@ -133,6 +133,13 @@ export interface CompactOptions {
    * undefined = unlimited.
    */
   timeBudgetMs?: number;
+  /**
+   * Treat a failed judge REQUEST (network, 5xx, the engine's 30s abort) as an
+   * unanswered batch — its candidates stay and the pass continues as a
+   * partial result. Parse-level failures (malformed answers) always throw.
+   * Off by default: replay's breaker and ledger rely on propagation.
+   */
+  tolerateRequestFailures?: boolean;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
   /**
@@ -164,6 +171,7 @@ export interface ResolvedCompactOptions {
   maxQuestionsPerRequest: number;
   askConcurrency: number;
   timeBudgetMs?: number;
+  tolerateRequestFailures?: boolean;
   truncateHeadChars: number;
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   trainingSource: 'live' | 'replay';
@@ -197,6 +205,8 @@ export interface CompactResult {
     /** True when `timeBudgetMs` ran out: unanswered candidates were kept and
      * the next compaction judges the remainder. */
     partial?: boolean;
+    /** Batches whose judge request failed; their candidates were kept. */
+    batchErrors?: number;
     /** Summed judge-reported timing over the requests that carried it (ollama behind a shim). */
     judge?: {
       requests: number;
