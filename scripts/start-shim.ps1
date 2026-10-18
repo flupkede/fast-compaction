@@ -17,7 +17,7 @@ foreach ($conn in $existing) {
 
 Step "spawn npx"
 Start-Process -FilePath $npx `
-  -ArgumentList 'tsx','scripts\systemone-shim.ts',"--port","$port",'--ollama','http://localhost:11434','--model','fast-compaction','--num-ctx','16384','--keep-alive','8760h' `
+  -ArgumentList 'tsx','scripts\systemone-shim.ts',"--port","$port",'--ollama','http://localhost:11434','--model','fast-compaction','--num-ctx','24576','--keep-alive','8760h' `
   -WorkingDirectory $repo -WindowStyle Hidden `
   -RedirectStandardOutput "$env:TEMP\shim.log" -RedirectStandardError "$env:TEMP\shim.err.log"
 
