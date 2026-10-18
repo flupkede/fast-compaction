@@ -44,16 +44,16 @@ describe('stats', () => {
     expect(s.lastAt).toBe(2);
   });
 
-  it('credits the last Jev drop per main-loop call until a fallback resets it', () => {
+  it('credits the last judge drop per main-loop call until a fallback resets it', () => {
     const s = emptySession('a', 0);
-    recordCompaction(s, { at: 1, outcome: 'jev', tokensBefore: 160_000, tokensDropped: 60_000, ms: 500 });
+    recordCompaction(s, { at: 1, outcome: 'judge', tokensBefore: 160_000, tokensDropped: 60_000, ms: 500 });
     recordTurn(s, { at: 2, usage: usage(0, 200_000), isAgent: false, contextTokens: 100_000 });
     recordTurn(s, { at: 3, usage: usage(0, 200_000), isAgent: true, contextTokens: 100_000 });
     expect(s.savedTokens).toBe(120_000);
     recordCompaction(s, { at: 4, outcome: 'fallback-low', reason: 'below 25%' });
     recordTurn(s, { at: 5, usage: usage(0, 100_000), isAgent: false, contextTokens: 100_000 });
     expect(s.savedTokens).toBe(120_000);
-    expect(s.compactions).toEqual({ jev: 1, 'fallback-low': 1, 'fallback-error': 0 });
+    expect(s.compactions).toEqual({ judge: 1, 'fallback-low': 1, 'fallback-error': 0 });
     expect(s.droppedTokens).toBe(60_000);
   });
 
@@ -85,16 +85,16 @@ describe('stats', () => {
 
   it('aggregates sessions and formats a report', () => {
     const a = emptySession('a', 1_790_000_000_000);
-    recordCompaction(a, { at: 1_790_000_100_000, outcome: 'jev', tokensBefore: 167_000, tokensDropped: 67_000, ratio: 0.4, ms: 600 });
+    recordCompaction(a, { at: 1_790_000_100_000, outcome: 'judge', tokensBefore: 167_000, tokensDropped: 67_000, ratio: 0.4, ms: 600 });
     recordTurn(a, { at: 1_790_000_200_000, usage: usage(1000, 99_000), isAgent: false, contextTokens: 100_000, costUsd: 1.25 });
     const b = emptySession('b', 1_790_001_000_000);
     recordCompaction(b, { at: 1_790_001_100_000, outcome: 'fallback-error', reason: 'timeout' });
     const total = aggregate([a, b]);
     expect(total.startedAt).toBe(1_790_000_000_000);
     expect(total.savedTokens).toBe(67_000);
-    expect(total.recent.map((r) => r.outcome)).toEqual(['jev', 'fallback-error']);
+    expect(total.recent.map((r) => r.outcome)).toEqual(['judge', 'fallback-error']);
     const report = formatReport(total, 'all sessions', 2);
-    expect(report).toContain('1 by Jev · jev avg 600 ms · 1 fallback (0 low reduction, 1 error)');
+    expect(report).toContain('1 by judge · judge avg 600 ms · 1 fallback (0 low reduction, 1 error)');
     expect(report).toContain('Saved        ~7K tokens at input price');
     expect(report).toContain('1 turns · avg 100K context per turn · cache hit 99.0%');
     expect(report).toContain('$1.25');
@@ -105,19 +105,19 @@ describe('stats', () => {
   it('reports the judge timing split when requests carried it', () => {
     const s = emptySession('a', 0);
     recordCompaction(s, {
-      at: 1, outcome: 'jev', ms: 12_340, requests: 3,
+      at: 1, outcome: 'judge', ms: 12_340, requests: 3,
       judge: { loadMs: 7_000, promptMs: 900, promptTokens: 6_000, genMs: 3_500, genTokens: 500 },
     });
     recordCompaction(s, {
-      at: 2, outcome: 'jev', ms: 4_500, requests: 1,
+      at: 2, outcome: 'judge', ms: 4_500, requests: 1,
       judge: { loadMs: 0, promptMs: 600, promptTokens: 4_000, genMs: 3_500, genTokens: 500 },
     });
     const total = aggregate([s]);
-    expect(total.jevRequests).toBe(4);
-    expect(total.jevPromptTokens).toBe(10_000);
+    expect(total.judgeRequests).toBe(4);
+    expect(total.judgePromptTokens).toBe(10_000);
     const report = formatReport(total, 'all sessions', 1);
     expect(report).toContain(
-      'Timing       avg per Jev compaction: load 3500 ms + prefill 750 ms (5K tok) + gen 3500 ms (500 tok) + 2.0 req/compaction',
+      'Timing       avg per judge compaction: load 3500 ms + prefill 750 ms (5K tok) + gen 3500 ms (500 tok) + 2.0 req/compaction',
     );
     expect(report).toContain('3 req');
   });

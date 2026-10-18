@@ -44,7 +44,7 @@ const HOOK_DEFAULTS = {
   targetFloorMinPercent: 25,
   targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
-  jevTimeoutMs: 8_000,
+  judgeTimeoutMs: 8_000,
   // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   ollamaModel: 'clef-flash',
@@ -76,7 +76,7 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   targetFloorMinPercent: number;
   targetFloorStepPercent: number;
   model: string;
-  jevTimeoutMs: number;
+  judgeTimeoutMs: number;
   /**
    * Full System One endpoint to post to; when set, the request goes there
    * instead of the TypeSafe API and no API key is needed (e.g. a local
@@ -124,7 +124,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   const askerOption = optionString(options, 'asker');
   const asker = askerOption === 'ollama' ? 'ollama' : 'cloud';
   const model = optionString(options, 'model');
-  const jevTimeoutMs = rawNumber(options, 'jevTimeoutMs');
+  // 'jevTimeoutMs' is the pre-rename option name; keep reading it so existing
+  // pluginConfigs keep working
+  const judgeTimeoutMs = rawNumber(options, 'judgeTimeoutMs') ?? rawNumber(options, 'jevTimeoutMs');
   const baseUrl = optionString(options, 'baseUrl');
   const ollamaUrl = optionString(options, 'ollamaUrl');
   const config: HookConfig = {
@@ -151,9 +153,9 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       HOOK_DEFAULTS.targetFloorStepPercent,
     ),
     model: model ?? (asker === 'ollama' ? HOOK_DEFAULTS.ollamaModel : HOOK_DEFAULTS.model),
-    jevTimeoutMs:
-      jevTimeoutMs ??
-      (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.jevTimeoutMs),
+    judgeTimeoutMs:
+      judgeTimeoutMs ??
+      (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.judgeTimeoutMs),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -171,7 +173,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
 
 /**
  * The floor for the next compaction's token target: one step down after an
- * accepted Jev compaction, reset to the start after any built-in-summary
+ * accepted judge compaction, reset to the start after any built-in-summary
  * fallback.
  */
 export function nextFloorPercent(
@@ -182,7 +184,7 @@ export function nextFloorPercent(
     'targetFloorStartPercent' | 'targetFloorMinPercent' | 'targetFloorStepPercent'
   >,
 ): number {
-  if (outcome !== 'jev') return config.targetFloorStartPercent;
+  if (outcome !== 'judge') return config.targetFloorStartPercent;
   return Math.max(
     config.targetFloorMinPercent,
     (current ?? config.targetFloorStartPercent) - config.targetFloorStepPercent,
@@ -300,7 +302,7 @@ export function withDeadline<T>(
   sleep: (ms: number) => Promise<void>,
 ): Promise<T> {
   const deadline = sleep(ms).then((): never => {
-    throw new Error(`Jev did not answer within ${ms} ms`);
+    throw new Error(`judge did not answer within ${ms} ms`);
   });
   deadline.catch(() => {});
   return Promise.race([work, deadline]);
@@ -507,7 +509,7 @@ const KNOBS = [
   'askConcurrency',
   'compactAtPercent',
   'minReductionRatio',
-  'jevTimeoutMs',
+  'judgeTimeoutMs',
   'model',
   'baseUrl',
 ] as const;
@@ -522,8 +524,8 @@ export function knobSnapshot(config: Pick<HookConfig, (typeof KNOBS)[number]>): 
  * can still run into the 30 s per-request fetch abort after the budget
  * check — leave 40 s of slack under the judge deadline, capped at 110 s.
  */
-export function hookTimeBudget(jevTimeoutMs: number): number {
-  return Math.max(30_000, Math.min(jevTimeoutMs - 40_000, 110_000));
+export function hookTimeBudget(judgeTimeoutMs: number): number {
+  return Math.max(30_000, Math.min(judgeTimeoutMs - 40_000, 110_000));
 }
 
 function notify(
@@ -653,7 +655,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
     };
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      config.timeBudgetMs = config.timeBudgetMs ?? hookTimeBudget(config.jevTimeoutMs);
+      config.timeBudgetMs = config.timeBudgetMs ?? hookTimeBudget(config.judgeTimeoutMs);
       // graceful partials: a transient batch failure keeps its candidates
       // instead of discarding the whole pass
       config.tolerateRequestFailures = true;
@@ -663,7 +665,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
           const response = await $.http.fetch(url, init);
           return { status: response.status, ok: response.ok, text: response.text };
         }),
-        config.jevTimeoutMs,
+        config.judgeTimeoutMs,
         (ms) => $.clock.sleep(ms, { signal: next.signal }),
       );
       for (const line of decisionLogLines(result)) $.ui.log(line);
@@ -687,14 +689,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
-      const record: Omit<CompactionRecord, 'at'> = { outcome: 'jev', ratio, ms: result.stats.ms, agent };
+      const record: Omit<CompactionRecord, 'at'> = { outcome: 'judge', ratio, ms: result.stats.ms, agent };
       if (tokensBefore !== undefined) record.tokensBefore = tokensBefore;
       if (result.stats.requests > 0) record.requests = result.stats.requests;
       if (result.stats.judge) record.judge = result.stats.judge;
       const dropped = droppedTokens(tokensBefore, ratio);
       if (dropped !== undefined) record.tokensDropped = dropped;
       logCompaction($, record);
-      persistFloor('jev');
+      persistFloor('judge');
       return { messages };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

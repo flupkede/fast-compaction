@@ -13,7 +13,7 @@ export type UsageTotals = {
   output: number;
 };
 
-export type CompactionOutcome = 'jev' | 'fallback-low' | 'fallback-error';
+export type CompactionOutcome = 'judge' | 'fallback-low' | 'fallback-error';
 
 /** Judge-reported timing sums for one compaction (from a shim in front of ollama). */
 export type JudgeSplit = {
@@ -48,17 +48,17 @@ export type SessionStats = {
   agents: UsageTotals;
   costUsd: number;
   compactions: Record<CompactionOutcome, number>;
-  jevMs: number;
-  /** Judge timing summed over every Jev compaction that reported it. */
-  jevRequests: number;
-  jevLoadMs: number;
-  jevPromptMs: number;
-  jevPromptTokens: number;
-  jevGenMs: number;
-  jevGenTokens: number;
+  judgeMs: number;
+  /** Judge timing summed over every judge compaction that reported it. */
+  judgeRequests: number;
+  judgeLoadMs: number;
+  judgePromptMs: number;
+  judgePromptTokens: number;
+  judgeGenMs: number;
+  judgeGenTokens: number;
   droppedTokens: number;
   savedTokens: number;
-  /** Tokens the latest Jev compaction removed; each later main-loop API call is credited with them until the next compaction. */
+  /** Tokens the latest judge compaction removed; each later main-loop API call is credited with them until the next compaction. */
   activeDrop: number;
   recent: CompactionRecord[];
   /** Percentage of the context window the next compaction targets; undefined = no budget compaction yet, the configured start floor applies. */
@@ -104,14 +104,14 @@ export function emptySession(id: string, now: number): SessionStats {
     main: emptyUsage(),
     agents: emptyUsage(),
     costUsd: 0,
-    compactions: { jev: 0, 'fallback-low': 0, 'fallback-error': 0 },
-    jevMs: 0,
-    jevRequests: 0,
-    jevLoadMs: 0,
-    jevPromptMs: 0,
-    jevPromptTokens: 0,
-    jevGenMs: 0,
-    jevGenTokens: 0,
+    compactions: { judge: 0, 'fallback-low': 0, 'fallback-error': 0 },
+    judgeMs: 0,
+    judgeRequests: 0,
+    judgeLoadMs: 0,
+    judgePromptMs: 0,
+    judgePromptTokens: 0,
+    judgeGenMs: 0,
+    judgeGenTokens: 0,
     droppedTokens: 0,
     savedTokens: 0,
     activeDrop: 0,
@@ -124,19 +124,45 @@ export function emptySession(id: string, now: number): SessionStats {
 export function reviveSession(id: string, value: unknown, now: number): SessionStats {
   const base = emptySession(id, now);
   if (!value || typeof value !== 'object') return base;
-  const stored = value as Partial<SessionStats>;
+  const stored = value as Partial<SessionStats> & Record<string, unknown>;
+  // legacy names from before the judge rename (jevMs, compactions.jev, …)
+  const legacy = stored as Record<string, number | undefined>;
+  const timing = {
+    judgeMs: stored.judgeMs ?? legacy.jevMs ?? base.judgeMs,
+    judgeRequests: stored.judgeRequests ?? legacy.jevRequests ?? base.judgeRequests,
+    judgeLoadMs: stored.judgeLoadMs ?? legacy.jevLoadMs ?? base.judgeLoadMs,
+    judgePromptMs: stored.judgePromptMs ?? legacy.jevPromptMs ?? base.judgePromptMs,
+    judgePromptTokens: stored.judgePromptTokens ?? legacy.jevPromptTokens ?? base.judgePromptTokens,
+    judgeGenMs: stored.judgeGenMs ?? legacy.jevGenMs ?? base.judgeGenMs,
+    judgeGenTokens: stored.judgeGenTokens ?? legacy.jevGenTokens ?? base.judgeGenTokens,
+  };
+  const rawCompactions = (stored.compactions ?? {}) as Record<string, number | undefined>;
+  const compactions = {
+    ...base.compactions,
+    ...rawCompactions,
+    judge: (rawCompactions.judge ?? 0) + (rawCompactions.jev ?? 0),
+  } as SessionStats['compactions'];
   return {
     ...base,
     ...stored,
+    ...timing,
     id,
     main: { ...base.main, ...stored.main },
     agents: { ...base.agents, ...stored.agents },
-    compactions: { ...base.compactions, ...stored.compactions },
+    compactions,
     recent: Array.isArray(stored.recent)
-      ? stored.recent.filter(
-          (r): r is CompactionRecord =>
-            !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && Object.hasOwn(base.compactions, r.outcome),
-        )
+      ? stored.recent
+          .map((r) => {
+            const record = r as CompactionRecord;
+            // legacy outcome name from before the judge rename
+            return (record as { outcome?: unknown }).outcome === 'jev'
+              ? { ...record, outcome: 'judge' as const }
+              : record;
+          })
+          .filter(
+            (r): r is CompactionRecord =>
+              !!r && typeof r.at === 'number' && typeof r.outcome === 'string' && Object.hasOwn(base.compactions, r.outcome),
+          )
       : [],
     // the spread above copies whatever an older store wrote; normalize explicitly
     floorPercent:
@@ -186,17 +212,17 @@ export function recordTurn(stats: SessionStats, turn: TurnSample): SessionStats 
 export function recordCompaction(stats: SessionStats, record: CompactionRecord): SessionStats {
   stats.lastAt = record.at;
   stats.compactions[record.outcome] += 1;
-  if (record.outcome === 'jev') {
-    stats.jevMs += record.ms ?? 0;
-    stats.jevRequests += record.requests ?? 0;
-    stats.jevLoadMs += record.judge?.loadMs ?? 0;
-    stats.jevPromptMs += record.judge?.promptMs ?? 0;
-    stats.jevPromptTokens += record.judge?.promptTokens ?? 0;
-    stats.jevGenMs += record.judge?.genMs ?? 0;
-    stats.jevGenTokens += record.judge?.genTokens ?? 0;
+  if (record.outcome === 'judge') {
+    stats.judgeMs += record.ms ?? 0;
+    stats.judgeRequests += record.requests ?? 0;
+    stats.judgeLoadMs += record.judge?.loadMs ?? 0;
+    stats.judgePromptMs += record.judge?.promptMs ?? 0;
+    stats.judgePromptTokens += record.judge?.promptTokens ?? 0;
+    stats.judgeGenMs += record.judge?.genMs ?? 0;
+    stats.judgeGenTokens += record.judge?.genTokens ?? 0;
   }
   if (!record.agent) {
-    const dropped = record.outcome === 'jev' ? (record.tokensDropped ?? 0) : 0;
+    const dropped = record.outcome === 'judge' ? (record.tokensDropped ?? 0) : 0;
     stats.droppedTokens += dropped;
     stats.activeDrop = dropped;
   }
@@ -206,7 +232,7 @@ export function recordCompaction(stats: SessionStats, record: CompactionRecord):
   return stats;
 }
 
-/** Tokens a Jev compaction removed: the context before times the reduction it measured on characters. */
+/** Tokens a judge compaction removed: the context before times the reduction it measured on characters. */
 export function droppedTokens(tokensBefore: number | undefined, ratio: number): number | undefined {
   if (tokensBefore === undefined || !Number.isFinite(ratio)) return undefined;
   return Math.max(0, Math.round(tokensBefore * ratio));
@@ -241,13 +267,13 @@ export function aggregate(sessions: readonly SessionStats[]): SessionStats {
     for (const key of Object.keys(total.compactions) as CompactionOutcome[]) {
       total.compactions[key] += s.compactions[key];
     }
-    total.jevMs += s.jevMs;
-    total.jevRequests += s.jevRequests;
-    total.jevLoadMs += s.jevLoadMs;
-    total.jevPromptMs += s.jevPromptMs;
-    total.jevPromptTokens += s.jevPromptTokens;
-    total.jevGenMs += s.jevGenMs;
-    total.jevGenTokens += s.jevGenTokens;
+    total.judgeMs += s.judgeMs;
+    total.judgeRequests += s.judgeRequests;
+    total.judgeLoadMs += s.judgeLoadMs;
+    total.judgePromptMs += s.judgePromptMs;
+    total.judgePromptTokens += s.judgePromptTokens;
+    total.judgeGenMs += s.judgeGenMs;
+    total.judgeGenTokens += s.judgeGenTokens;
     total.droppedTokens += s.droppedTokens;
     total.savedTokens += s.savedTokens;
     total.recent.push(...s.recent);
@@ -278,17 +304,17 @@ function recordLine(r: CompactionRecord): string {
 }
 
 /** `avg load + prefill (tokens) + gen (tokens)` when any judge timing was reported. */
-function timingLine(stats: SessionStats, jevCount: number): string | undefined {
+function timingLine(stats: SessionStats, judgeCount: number): string | undefined {
   const hasJudge =
-    stats.jevPromptMs > 0 || stats.jevGenMs > 0 || stats.jevLoadMs > 0 || stats.jevRequests > 0;
-  if (!hasJudge || jevCount === 0) return undefined;
+    stats.judgePromptMs > 0 || stats.judgeGenMs > 0 || stats.judgeLoadMs > 0 || stats.judgeRequests > 0;
+  if (!hasJudge || judgeCount === 0) return undefined;
   const parts = [
-    `load ${Math.round(stats.jevLoadMs / jevCount)} ms`,
-    `prefill ${Math.round(stats.jevPromptMs / jevCount)} ms (${formatTokens(stats.jevPromptTokens / jevCount)} tok)`,
-    `gen ${Math.round(stats.jevGenMs / jevCount)} ms (${formatTokens(stats.jevGenTokens / jevCount)} tok)`,
+    `load ${Math.round(stats.judgeLoadMs / judgeCount)} ms`,
+    `prefill ${Math.round(stats.judgePromptMs / judgeCount)} ms (${formatTokens(stats.judgePromptTokens / judgeCount)} tok)`,
+    `gen ${Math.round(stats.judgeGenMs / judgeCount)} ms (${formatTokens(stats.judgeGenTokens / judgeCount)} tok)`,
   ];
-  if (stats.jevRequests > 0) parts.push(`${(stats.jevRequests / jevCount).toFixed(1)} req/compaction`);
-  return `Timing       avg per Jev compaction: ${parts.join(' + ')}`;
+  if (stats.judgeRequests > 0) parts.push(`${(stats.judgeRequests / judgeCount).toFixed(1)} req/compaction`);
+  return `Timing       avg per judge compaction: ${parts.join(' + ')}`;
 }
 
 export function formatReport(stats: SessionStats, scope: string, sessionCount: number, recent = 5): string {
@@ -296,20 +322,20 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
   const u = sumUsage(stats.main, stats.agents);
   const sent = u.input + u.cacheRead + u.cacheWrite;
   const hit = sent > 0 ? `${((u.cacheRead / sent) * 100).toFixed(1)}%` : 'n/a';
-  const avgMs = c.jev > 0 ? Math.round(stats.jevMs / c.jev) : 0;
+  const avgMs = c.judge > 0 ? Math.round(stats.judgeMs / c.judge) : 0;
   const avgContext = u.turns > 0 ? formatTokens(sent / u.turns) : 'n/a';
   const fallbacks = c['fallback-low'] + c['fallback-error'];
   const lines = [
     `fast-compaction: ${scope}, ${sessionCount} session(s) since ${
       sessionCount > 0 ? stamp(stats.startedAt) : 'n/a'
     }`,
-    `Compactions  ${c.jev} by Jev${c.jev > 0 ? ` · jev avg ${avgMs} ms` : ''} · ${
+    `Compactions  ${c.judge} by judge${c.judge > 0 ? ` · judge avg ${avgMs} ms` : ''} · ${
       fallbacks > 0 ? `${fallbacks} fallback (${c['fallback-low']} low reduction, ${c['fallback-error']} error)` : 'no fallbacks'
     }`,
     `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} tokens at input price (estimate)`,
     `Cost         $${stats.costUsd.toFixed(2)} · ${u.turns} turns · avg ${avgContext} context per turn · cache hit ${hit}`,
   ];
-  const timing = timingLine(stats, c.jev);
+  const timing = timingLine(stats, c.judge);
   if (timing) lines.push(timing);
   const last = stats.recent.slice(-recent);
   if (last.length > 0) lines.push('', 'Recent', ...last.map(recordLine));

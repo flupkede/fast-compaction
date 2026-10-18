@@ -1,6 +1,6 @@
 # fast-compaction
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
+Claude Code plugin that replaces the compaction summary with judge decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
 library.
@@ -10,7 +10,7 @@ library.
 Most context compaction asks an LLM to summarize old turns. A summary is
 lossy: a file path, exact error, constraint, or command can disappear even when
 it matters later. This library never rewrites anything. It only deletes tool
-calls and tool results Jev says are no longer needed, and it asks Jev while
+calls and tool results judge says are no longer needed, and it asks judge while
 showing it the whole conversation. User and assistant text stays verbatim and
 in order.
 
@@ -20,7 +20,7 @@ built-in compaction summary with the original messages.
 
 ## Secret redaction (fork of tamaratran/fast-jev-compaction)
 
-Only the state sent to Jev (`src/state.ts`) is affected — the transcript
+Only the state sent to judge (`src/state.ts`) is affected — the transcript
 `compact()` returns to the caller is untouched, so nothing kept locally is
 ever redacted. Before message text or tool input is serialised into that
 state, `src/redact.ts` replaces secret-shaped substrings (API keys, tokens,
@@ -35,7 +35,7 @@ shapes, not arbitrary confidential text.
 1. Every `tool_use` is paired with its `tool_result` by `tool_use_id`. Calls in
    the first message or in the newest `preserveRecentMessages` messages are
    pinned and never touched.
-2. The **state** sent to Jev is the whole conversation so far, oldest first,
+2. The **state** sent to judge is the whole conversation so far, oldest first,
    with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
    Tool inputs are included, texts are included, nothing is summarized.
 3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
@@ -47,13 +47,13 @@ shapes, not arbitrary confidential text.
    out; runs of old call-only messages folded into one entry. If it still
    does not fit, compaction throws. Tokens are estimated without a tokenizer (a
    word per six letters, half a token per digit, ~one per other symbol),
-   calibrated to land a little above the counts Jev reports.
-4. For every non-pinned call Jev gets two `noul` questions: should the **call**
+   calibrated to land a little above the counts judge reports.
+4. For every non-pinned call judge gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
    tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
+   stays under `maxRequestTokens` (30k by default, under judge's 32k request
    limit). The same full state is resent with every request; requests run
    concurrently and their answers are merged.
 6. Decisions per call, against `keepThreshold`:
@@ -65,7 +65,7 @@ shapes, not arbitrary confidential text.
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
 
-Jev failures, malformed answers, a missing key, or a history that cannot be
+judge failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 
 ## Install and usage
@@ -113,21 +113,21 @@ put it in a source file.
 | Option | Default | Description |
 | --- | --- | --- |
 | `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
+| `model` | `jev-latest` | judge model name |
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `preserveStartMessages` | `2` | Oldest messages the token budget never demotes (active with `targetTokens`) |
-| `targetTokens` | off | Absolute estimated-token ceiling for the compacted transcript; entries Jev kept are demoted budget-wise (results, then calls, then prose, lowest score first) until it fits |
+| `targetTokens` | off | Absolute estimated-token ceiling for the compacted transcript; entries judge kept are demoted budget-wise (results, then calls, then prose, lowest score first) until it fits |
 | `maxStateTokens` | `25000` | Token ceiling for the state; automatically capped to what `maxRequestTokens` minus a question reserve allows, so a fat state can never starve the question batches |
 | `maxRequestTokens` | `26000` | Token budget for state plus questions in one judge request; state fit and batch sizes derive from it and cannot exceed it. Keep it ~2000 below the judge endpoint's context (shim default `num_ctx` 32768) so prompt plus generated answer always fit |
 | `maxQuestionsPerRequest` | `12` | Judge questions per request (call batches get half — two questions per call); route limit 64, practical ceiling is the engine's 30s per-request abort (~1.5s/question on a shared GPU) |
 | `askConcurrency` | `2` | Judge requests in flight at once; 2 matches Ollama's default parallel slots |
 | `timeBudgetMs` | derived (plugin) | Stop asking the judge after this long: unanswered candidates stay and the next compaction judges the remainder. Derived when unset: judge timeout − 40 s slack for a worst-case batch, capped at 110 s (the engine kills hooks at ~2 min), floor 30 s; library default unlimited. A failed judge request keeps its candidates and continues as a partial result (parse-level failures still throw) |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
-| `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions; schema 2 also judges conversation messages) for local training-data collection; a throwing logger is ignored. Message judging covers the prose entries that fit the state: on very large histories the late shrink stage leaves the oldest prose out of the state entirely, and those entries are never judged and survive compaction untouched |
+| `trainingLog` | off | Callback receiving one `TrainingRecord` whenever judge was asked (redacted state, questions, judge's answers, decisions; schema 2 also judges conversation messages) for local training-data collection; a throwing logger is ignored. Message judging covers the prose entries that fit the state: on very large histories the late shrink stage leaves the oldest prose out of the state entirely, and those entries are never judged and survive compaction untouched |
 | `strip` | off | Identifier pseudonymisation applied after secret redaction: paths, URLs, e-mails, GUIDs, IPs, domains and a `blocklist` become stable tokens (`[PATH_1]`, `[URL_2]`, …) before anything is sent |
 
 `createTrainingLogger({ dir })` turns that callback into an append-only
@@ -136,11 +136,11 @@ the data stays on the local machine.
 
 ## Replaying stored sessions
 
-Historical sessions carry no labels — Jev's judgment only exists where a
+Historical sessions carry no labels — judge's judgment only exists where a
 compaction actually ran. `scripts/replay-training.ts` replays stored Claude
 Code (`~/.claude/projects/**/*.jsonl`) and OpenCode (`opencode.db`) sessions
 through the live pipeline and writes one `source: "replay"` record per session
-that asks Jev, using the same redaction as live compaction:
+that asks judge, using the same redaction as live compaction:
 
 ```sh
 npm run replay -- --dry-run        # count sessions, candidate calls, ~requests
@@ -219,7 +219,7 @@ large" are split into fitting windows at user prompts and replayed per window
 by default; `--no-segment` disables that. `--source claude|opencode|both`,
 `--delay-ms` (default 500 between sessions), `--dir`, `--claude-root`,
 `--opencode-db` and `--min-messages` tune the sweep. Reading OpenCode needs
-Node >= 22.5 (`node:sqlite`). Replay labels are Jev judging a session's end
+Node >= 22.5 (`node:sqlite`). Replay labels are judge judging a session's end
 state rather than a mid-session compaction; records keep `source` so training
 can tell them apart.
 
@@ -273,9 +273,9 @@ event, so tuning applies to a running session without reloading the plugin; a
 reload (`/reload-plugins`, or restarting the agent) is only needed for plugin
 code updates.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
-auto-compaction) goes through Jev: the toast reads
+auto-compaction) goes through judge: the toast reads
 `fast-compaction: kept N/M messages, no summary (…)` when the pruned history
-replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
+replaced the built-in summary, or `fallback to built-in summary (…)` when judge
 could not remove enough (short sessions, or when it fails). `/compress`
 triggers the same compaction on demand — e.g. where the host's compact button
 bypasses plugin hooks, such as Zed's SDK runtime.
@@ -295,14 +295,14 @@ npm run validate:plugin  # claude plugin validate
 TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
+The unit tests use a fake judge and never contact TypeSafe. The demo is the live
 network check.
 
 ## Animated demo (macOS)
 
 `demo/JevDemo` is a small native SwiftUI app that plays a scripted, dramatized
 version of the compaction flow inside a Claude Code-style terminal: the tool
-calls of a canned transcript are scored, results and calls Jev lets go turn red
+calls of a canned transcript are scored, results and calls judge lets go turn red
 and collapse away, and the rest stays verbatim. It never calls the API; it
 exists to be screen recorded.
 

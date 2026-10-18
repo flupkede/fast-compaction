@@ -48,7 +48,7 @@ describe(`/${STATS_COMMAND}`, () => {
   async function seeded() {
     const store = memoryStore();
     await updateSessionStats({ store }, 'mine', 1_790_000_000_000, (s) => {
-      recordCompaction(s, { at: 1_790_000_000_000, outcome: 'jev', tokensBefore: 160_000, tokensDropped: 60_000 });
+      recordCompaction(s, { at: 1_790_000_000_000, outcome: 'judge', tokensBefore: 160_000, tokensDropped: 60_000 });
       recordTurn(s, { at: 1_790_000_001_000, usage, isAgent: false, contextTokens: 100_000 });
     });
     await updateSessionStats({ store }, 'theirs', 1_790_000_000_000, (s) => {
@@ -78,7 +78,7 @@ describe(`/${STATS_COMMAND}`, () => {
   it('does not let a subagent compaction move the main-loop credit', async () => {
     const store = memoryStore();
     await updateSessionStats({ store }, 's', 1, (s) => {
-      recordCompaction(s, { at: 1, outcome: 'jev', tokensDropped: 50_000 });
+      recordCompaction(s, { at: 1, outcome: 'judge', tokensDropped: 50_000 });
       recordCompaction(s, { at: 2, outcome: 'fallback-error', agent: true });
       recordTurn(s, { at: 3, usage, isAgent: false, contextTokens: 100_000 });
     });

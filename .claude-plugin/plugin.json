@@ -1,7 +1,7 @@
 {
   "name": "fast-compaction",
-  "version": "0.6.5",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "version": "0.7.0",
+  "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
@@ -19,7 +19,7 @@
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
+      "description": "Minimum judge probability that a tool call or tool result is still needed; below it the item is removed.",
       "default": 0.5
     },
     "preserveRecentMessages": {
@@ -49,7 +49,7 @@
     "targetFloorStartPercent": {
       "type": "number",
       "title": "Target floor start (%)",
-      "description": "Compaction target as a percentage of the context window, starting here; steps down after each accepted Jev compaction and resets on any fallback to the built-in summary.",
+      "description": "Compaction target as a percentage of the context window, starting here; steps down after each accepted judge compaction and resets on any fallback to the built-in summary.",
       "default": 50
     },
     "targetFloorMinPercent": {
@@ -61,18 +61,18 @@
     "targetFloorStepPercent": {
       "type": "number",
       "title": "Target floor step (%)",
-      "description": "Percentage points the compaction target steps down after each accepted Jev compaction.",
+      "description": "Percentage points the compaction target steps down after each accepted judge compaction.",
       "default": 5
     },
     "maxStateTokens": {
       "type": "number",
-      "title": "Maximum Jev state tokens",
-      "description": "Estimated token budget for the conversation state sent with every Jev request.",
+      "title": "Maximum judge state tokens",
+      "description": "Estimated token budget for the conversation state sent with every judge request.",
       "default": 25000
     },
     "maxRequestTokens": {
       "type": "number",
-      "title": "Maximum Jev request tokens",
+      "title": "Maximum judge request tokens",
       "description": "Token budget for state plus questions in one judge request. State and batch sizes derive automatically and can never exceed it; keep it at least ~2000 below the judge endpoint's context (shim default num_ctx 32768).",
       "default": 26000
     },
@@ -97,7 +97,7 @@
     "truncateHeadChars": {
       "type": "number",
       "title": "Truncated tool result head",
-      "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
+      "description": "Characters of a tool result kept when the judge decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
     "model": {
@@ -118,10 +118,10 @@
       "description": "System One endpoint of the local Ollama judge, used when asker is ollama",
       "default": "http://localhost:11434/v1/systemone"
     },
-    "jevTimeoutMs": {
+    "judgeTimeoutMs": {
       "type": "number",
-      "title": "Jev timeout (ms)",
-      "description": "How long compaction waits for Jev before falling back to the built-in summary; keep it under the engine's hook budget.",
+      "title": "Judge timeout (ms)",
+      "description": "How long compaction waits for the judge before falling back to the built-in summary; keep it under the engine's hook budget.",
       "default": 8000
     }
   }

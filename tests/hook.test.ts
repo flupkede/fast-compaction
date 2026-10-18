@@ -67,7 +67,7 @@ describe('hook config', () => {
       targetFloorMinPercent: 25,
       targetFloorStepPercent: 5,
       model: 'jev-latest',
-      jevTimeoutMs: 8000,
+      judgeTimeoutMs: 8000,
 
     });
     expect(
@@ -83,7 +83,7 @@ describe('hook config', () => {
       targetFloorStartPercent: 50,
       targetFloorMinPercent: 25,
       targetFloorStepPercent: 5,
-      jevTimeoutMs: 8000,
+      judgeTimeoutMs: 8000,
 
     });
   });
@@ -98,7 +98,7 @@ describe('hook config', () => {
       targetFloorStepPercent: 5,
       baseUrl: 'http://localhost:11434/v1/systemone',
       model: 'clef-flash',
-      jevTimeoutMs: 600000,
+      judgeTimeoutMs: 600000,
 
     });
   });
@@ -135,17 +135,24 @@ describe('hook config', () => {
     expect(hookTimeBudget(50_000)).toBe(30_000);
   });
 
-  it('lets explicit baseUrl, model and jevTimeoutMs win over the ollama defaults', () => {
+  it('still reads the pre-rename jevTimeoutMs option name', () => {
+    expect(resolveHookConfig({ jevTimeoutMs: 123_456 }).judgeTimeoutMs).toBe(123_456);
+    expect(resolveHookConfig({ judgeTimeoutMs: 999 }).judgeTimeoutMs).toBe(999);
+    // the new name wins when both are present
+    expect(resolveHookConfig({ judgeTimeoutMs: 999, jevTimeoutMs: 123_456 }).judgeTimeoutMs).toBe(999);
+  });
+
+  it('lets explicit baseUrl, model and judgeTimeoutMs win over the ollama defaults', () => {
     const config = resolveHookConfig({
       asker: 'ollama',
       baseUrl: 'http://gpu:11434/v1/systemone',
       ollamaUrl: 'http://ignored:11434/v1/systemone',
       model: 'student',
-      jevTimeoutMs: 1234,
+      judgeTimeoutMs: 1234,
     });
     expect(config.baseUrl).toBe('http://gpu:11434/v1/systemone');
     expect(config.model).toBe('student');
-    expect(config.jevTimeoutMs).toBe(1234);
+    expect(config.judgeTimeoutMs).toBe(1234);
   });
 
   it('falls back to ollamaUrl when baseUrl is not set for the ollama asker', () => {
@@ -157,7 +164,7 @@ describe('hook config', () => {
     const config = resolveHookConfig({ ollamaUrl: 'http://gpu:11434/v1/systemone' });
     expect(config.baseUrl).toBeUndefined();
     expect(config.model).toBe('jev-latest');
-    expect(config.jevTimeoutMs).toBe(8000);
+    expect(config.judgeTimeoutMs).toBe(8000);
   });
 });
 
@@ -169,10 +176,10 @@ describe('nextFloorPercent', () => {
   };
 
   it('steps down from the start on a Jev compaction and clamps at the minimum', () => {
-    expect(nextFloorPercent(undefined, 'jev', config)).toBe(45);
-    expect(nextFloorPercent(45, 'jev', config)).toBe(40);
-    expect(nextFloorPercent(27, 'jev', config)).toBe(25);
-    expect(nextFloorPercent(25, 'jev', config)).toBe(25);
+    expect(nextFloorPercent(undefined, 'judge', config)).toBe(45);
+    expect(nextFloorPercent(45, 'judge', config)).toBe(40);
+    expect(nextFloorPercent(27, 'judge', config)).toBe(25);
+    expect(nextFloorPercent(25, 'judge', config)).toBe(25);
   });
 
   it('resets to the start after any fallback', () => {
