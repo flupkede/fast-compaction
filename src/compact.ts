@@ -214,6 +214,24 @@ function sumJudge(total: CompactResult['stats']['judge'], timing: JudgeTiming | 
   };
 }
 
+/** Runs `fn` over `items` with at most `limit` in flight. Submissions happen
+ * only when a slot frees, so a request never queues behind another — the
+ * host's hard 30s per-request fetch abort counts wall time from submission.
+ * Limit 2 matches ollama's parallel slots: higher just queues server-side. */
+async function pooled<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i]!);
+      }
+    }),
+  );
+  return results;
+}
+
 async function askBatch(
   asker: JevAsker,
   state: CompactionState,
@@ -506,8 +524,10 @@ export async function compact(
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const judgeTimings: JudgeTiming[] = [];
-    const answeredCall = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch, judgeTimings)),
+    const answeredCall = await pooled(
+      batches,
+      2,
+      (batch) => askBatch(asker, state.state, batch, judgeTimings),
     );
     for (const map of answeredCall) {
       for (const [id, answer] of map) answers.set(id as string, answer as CallAnswer);
@@ -526,8 +546,10 @@ export async function compact(
       messageChunkSize(fitted.tokens, resolved.maxRequestTokens),
     );
     const fittedState = fitted.state;
-    const answeredMessages = await Promise.all(
-      messageChunks.map((batch) => askMessageBatch(asker, fittedState, batch, callJudge)),
+    const answeredMessages = await pooled(
+      messageChunks,
+      2,
+      (batch) => askMessageBatch(asker, fittedState, batch, callJudge),
     );
     for (const map of answeredMessages) {
       for (const [i, noul] of map) messageAnswers.set(i, noul);

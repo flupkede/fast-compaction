@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
