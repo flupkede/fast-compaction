@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -73,8 +73,8 @@
     "maxRequestTokens": {
       "type": "number",
       "title": "Maximum Jev request tokens",
-      "description": "Estimated token budget for state plus questions in one Jev request.",
-      "default": 30000
+      "description": "Token budget for state plus questions in one judge request. State and batch sizes derive automatically and can never exceed it; keep it at least ~2000 below the judge endpoint's context (shim default num_ctx 32768).",
+      "default": 26000
     },
     "maxQuestionsPerRequest": {
       "type": "number",

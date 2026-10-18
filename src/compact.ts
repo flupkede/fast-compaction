@@ -26,7 +26,9 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   preserveRecentMessages: 6,
   preserveStartMessages: 2,
   maxStateTokens: 25_000,
-  maxRequestTokens: 30_000,
+  // at least ~2k below the shim's num_ctx (32768): prompt plus generated
+  // answer tokens must fit the judge's context — 26000 leaves that headroom
+  maxRequestTokens: 26_000,
   maxQuestionsPerRequest: 12,
   askConcurrency: 2,
   truncateHeadChars: 300,
@@ -500,6 +502,23 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
   return decisions.filter((decision) => decision.reason === reason).length;
 }
 
+/** A batch of one call must always fit beside the state, whatever the caller
+ * tuned: the state fit is additionally capped by the request budget minus a
+ * minimal question reserve, so a fat state can never starve every batch
+ * (observed live: state 19258 against maxRequestTokens 19000). */
+const QUESTION_RESERVE_TOKENS = 320;
+
+function stateFitOptions(resolved: ResolvedCompactOptions): ResolvedCompactOptions {
+  const ceiling = Math.max(
+    1_000,
+    Math.min(
+      resolved.maxStateTokens,
+      resolved.maxRequestTokens - REQUEST_OVERHEAD_TOKENS - QUESTION_RESERVE_TOKENS,
+    ),
+  );
+  return ceiling === resolved.maxStateTokens ? resolved : { ...resolved, maxStateTokens: ceiling };
+}
+
 /**
  * Compacts a transcript by asking Jev, for every tool call outside the pinned
  * first and newest messages, whether the call and whether its result must
@@ -533,7 +552,7 @@ export async function compact(
   const protectedIndex = (i: number): boolean =>
     isPinned(i, messages.length, resolved.preserveRecentMessages, resolved.preserveStartMessages);
   if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
+    const state = fitState(messages, calls, stateFitOptions(resolved));
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const judgeTimings: JudgeTiming[] = [];
@@ -549,7 +568,7 @@ export async function compact(
   }
   // prose entries present in the fitted state, outside the protected window
   if (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0)) {
-    fitted = fitted ?? fitState(messages, calls, resolved);
+    fitted = fitted ?? fitState(messages, calls, stateFitOptions(resolved));
     proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
     messageCandidates = proseEntries.filter((entry) => !protectedIndex(entry.i));
     // note: prose entries the fitter left out entirely (late shrink stage on

@@ -121,8 +121,8 @@ put it in a source file.
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `preserveStartMessages` | `2` | Oldest messages the token budget never demotes (active with `targetTokens`) |
 | `targetTokens` | off | Absolute estimated-token ceiling for the compacted transcript; entries Jev kept are demoted budget-wise (results, then calls, then prose, lowest score first) until it fits |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
+| `maxStateTokens` | `25000` | Token ceiling for the state; automatically capped to what `maxRequestTokens` minus a question reserve allows, so a fat state can never starve the question batches |
+| `maxRequestTokens` | `26000` | Token budget for state plus questions in one judge request; state fit and batch sizes derive from it and cannot exceed it. Keep it ~2000 below the judge endpoint's context (shim default `num_ctx` 32768) so prompt plus generated answer always fit |
 | `maxQuestionsPerRequest` | `12` | Judge questions per request (call batches get half — two questions per call); route limit 64, practical ceiling is the engine's 30s per-request abort (~1.5s/question on a shared GPU) |
 | `askConcurrency` | `2` | Judge requests in flight at once; 2 matches Ollama's default parallel slots |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |

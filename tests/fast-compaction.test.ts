@@ -79,7 +79,7 @@ describe('options', () => {
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxRequestTokens: 26_000,
       maxQuestionsPerRequest: 12,
       askConcurrency: 2,
       truncateHeadChars: 300,
@@ -473,6 +473,24 @@ describe('compact', () => {
     expect(seen).toHaveLength(0);
     expect(output.stats).toMatchObject({ requests: 0, calls: 0, messagesDropped: 0 });
     expect(output.messages).toEqual(messages);
+  });
+
+  it('caps the state fit by the request budget so a batch of one always fits', async () => {
+    // regression: a state allowed up to maxStateTokens (25000) grew past a
+    // tuned maxRequestTokens of 19000 and starved every question batch
+    const messages = [
+      message('user', 'seed'),
+      call('tool-fat', 'Read', { file_path: 'src/big.ts' }, 'x'),
+      result('tool-fat', 'body '.repeat(6000)),
+      message('user', 'later'),
+      message('user', 'latest'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.9), {
+      maxRequestTokens: 19_000,
+      preserveRecentMessages: 1,
+    });
+    expect(output.stats.stateTokens).toBeLessThanOrEqual(19_000 - 20 - 320);
+    expect(output.stats.requests).toBeGreaterThan(0);
   });
 
   it('judges pure-chat prose even with no tool calls at all', async () => {
