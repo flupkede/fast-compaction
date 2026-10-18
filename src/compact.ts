@@ -106,8 +106,9 @@ export function questionForEntry(entry: HistoryEntry): JevQuestions {
  * (always complete) state, fit one request. Each call carries two questions
  * (`keepCall` + `keepResult`). Two caps apply: the System One route accepts
  * at most 64 question fields per request, and the host's `$.http.fetch`
- * aborts a request at a hard 30s — the local judge needs ~0.6s per question,
- * so a request may carry at most 24 questions (~18s), i.e. 12 calls.
+ * aborts a request at a hard 30s — shared with a concurrent batch the local
+ * judge needs ~1.5s per question, so a request may carry at most 12
+ * questions (~18s), i.e. 6 calls.
  */
 export function batchCalls(
   calls: readonly ToolCall[],
@@ -120,7 +121,7 @@ export function batchCalls(
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && (currentTokens + tokens > budget || current.length >= 12)) {
+    if (current.length > 0 && (currentTokens + tokens > budget || current.length >= 6)) {
       batches.push(current);
       current = [];
       currentTokens = 0;
@@ -146,8 +147,9 @@ const EMPTY_FITTED: FittedState = {
 
 /** Splits a list into fixed-size chunks (last one may be shorter). */
 // Route limit is 64 questions, but the host's $.http.fetch aborts at a hard
-// 30s and the local judge needs ~0.6s per question — keep requests ≤24.
-const MESSAGE_BATCH_QUESTIONS = 24; // one noul question per entry
+// 30s — shared with a concurrent batch the judge needs ~1.5s per question.
+// Keep requests ≤12 questions.
+const MESSAGE_BATCH_QUESTIONS = 12; // one noul question per entry
 
 /** Question-token cost of one `msg_<i>` question (constant instructions). */
 const MESSAGE_QUESTION_TOKENS = 64;
