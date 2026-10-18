@@ -27,6 +27,8 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   preserveStartMessages: 2,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
+  maxQuestionsPerRequest: 12,
+  askConcurrency: 2,
   truncateHeadChars: 300,
   trainingSource: 'live',
 };
@@ -54,6 +56,19 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     maxRequestTokens: Math.max(
       1,
       finite(options.maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens),
+    ),
+    maxQuestionsPerRequest: Math.max(
+      1,
+      Math.min(
+        64,
+        Math.floor(
+          finite(options.maxQuestionsPerRequest, DEFAULT_OPTIONS.maxQuestionsPerRequest),
+        ),
+      ),
+    ),
+    askConcurrency: Math.max(
+      1,
+      Math.floor(finite(options.askConcurrency, DEFAULT_OPTIONS.askConcurrency)),
     ),
     truncateHeadChars: Math.max(
       0,
@@ -104,24 +119,22 @@ export function questionForEntry(entry: HistoryEntry): JevQuestions {
 /**
  * Splits the candidate calls into batches whose questions, together with the
  * (always complete) state, fit one request. Each call carries two questions
- * (`keepCall` + `keepResult`). Two caps apply: the System One route accepts
- * at most 64 question fields per request, and the host's `$.http.fetch`
- * aborts a request at a hard 30s — shared with a concurrent batch the local
- * judge needs ~1.5s per question, so a request may carry at most 12
- * questions (~18s), i.e. 6 calls.
+ * (`keepCall` + `keepResult`), so the call cap is half
+ * `maxQuestionsPerRequest`.
  */
 export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
-  options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+  options: Pick<ResolvedCompactOptions, 'maxRequestTokens' | 'maxQuestionsPerRequest'>,
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
+  const callCap = Math.max(1, Math.floor(options.maxQuestionsPerRequest / 2));
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && (currentTokens + tokens > budget || current.length >= 6)) {
+    if (current.length > 0 && (currentTokens + tokens > budget || current.length >= callCap)) {
       batches.push(current);
       current = [];
       currentTokens = 0;
@@ -145,19 +158,17 @@ const EMPTY_FITTED: FittedState = {
   stage: '',
 };
 
-/** Splits a list into fixed-size chunks (last one may be shorter). */
-// Route limit is 64 questions, but the host's $.http.fetch aborts at a hard
-// 30s — shared with a concurrent batch the judge needs ~1.5s per question.
-// Keep requests ≤12 questions.
-const MESSAGE_BATCH_QUESTIONS = 12; // one noul question per entry
-
 /** Question-token cost of one `msg_<i>` question (constant instructions). */
 const MESSAGE_QUESTION_TOKENS = 64;
 
-/** Message batch size bounded by the same request budget the call batches use. */
-export function messageChunkSize(stateTokens: number, maxRequestTokens: number): number {
+/** Message batch size bounded by the question cap and the request budget. */
+export function messageChunkSize(
+  stateTokens: number,
+  maxRequestTokens: number,
+  maxQuestionsPerRequest = 12,
+): number {
   const room = maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
-  return Math.max(1, Math.min(MESSAGE_BATCH_QUESTIONS, Math.floor(room / MESSAGE_QUESTION_TOKENS)));
+  return Math.max(1, Math.min(maxQuestionsPerRequest, Math.floor(room / MESSAGE_QUESTION_TOKENS)));
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -528,7 +539,7 @@ export async function compact(
     const judgeTimings: JudgeTiming[] = [];
     const answeredCall = await pooled(
       batches,
-      2,
+      resolved.askConcurrency,
       (batch) => askBatch(asker, state.state, batch, judgeTimings),
     );
     for (const map of answeredCall) {
@@ -545,12 +556,12 @@ export async function compact(
     // very large histories) are never judged and survive compaction untouched
     const messageChunks = chunk(
       messageCandidates,
-      messageChunkSize(fitted.tokens, resolved.maxRequestTokens),
+      messageChunkSize(fitted.tokens, resolved.maxRequestTokens, resolved.maxQuestionsPerRequest),
     );
     const fittedState = fitted.state;
     const answeredMessages = await pooled(
       messageChunks,
-      2,
+      resolved.askConcurrency,
       (batch) => askMessageBatch(asker, fittedState, batch, callJudge),
     );
     for (const map of answeredMessages) {
@@ -646,7 +657,11 @@ export async function compact(
         batches.length +
         Math.ceil(
           messageCandidates.length /
-            messageChunkSize((fitted ?? EMPTY_FITTED).tokens, resolved.maxRequestTokens),
+            messageChunkSize(
+              (fitted ?? EMPTY_FITTED).tokens,
+              resolved.maxRequestTokens,
+              resolved.maxQuestionsPerRequest,
+            ),
         ),
       ms: Date.now() - started,
       judge,

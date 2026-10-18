@@ -104,7 +104,10 @@ export function planReplay(messages: readonly Message[], options: CompactOptions
     const batches = batchCalls(candidates, fitted.tokens, resolved);
     const requests =
       batches.length +
-      Math.ceil(proseCandidates.length / messageChunkSize(fitted.tokens, resolved.maxRequestTokens));
+      Math.ceil(
+        proseCandidates.length /
+          messageChunkSize(fitted.tokens, resolved.maxRequestTokens, resolved.maxQuestionsPerRequest),
+      );
     if (candidates.length === 0 && proseCandidates.length === 0) {
       return { messages: messages.length, calls: 0, prose: 0, requests: 0, tokens: fitted.tokens };
     }

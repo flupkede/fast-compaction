@@ -123,6 +123,8 @@ put it in a source file.
 | `targetTokens` | off | Absolute estimated-token ceiling for the compacted transcript; entries Jev kept are demoted budget-wise (results, then calls, then prose, lowest score first) until it fits |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
+| `maxQuestionsPerRequest` | `12` | Judge questions per request (call batches get half — two questions per call); route limit 64, practical ceiling is the engine's 30s per-request abort (~1.5s/question on a shared GPU) |
+| `askConcurrency` | `2` | Judge requests in flight at once; 2 matches Ollama's default parallel slots |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 | `trainingLog` | off | Callback receiving one `TrainingRecord` whenever Jev was asked (redacted state, questions, Jev's answers, decisions; schema 2 also judges conversation messages) for local training-data collection; a throwing logger is ignored. Message judging covers the prose entries that fit the state: on very large histories the late shrink stage leaves the oldest prose out of the state entirely, and those entries are never judged and survive compaction untouched |
 | `strip` | off | Identifier pseudonymisation applied after secret redaction: paths, URLs, e-mails, GUIDs, IPs, domains and a `blocklist` become stable tokens (`[PATH_1]`, `[URL_2]`, …) before anything is sent |

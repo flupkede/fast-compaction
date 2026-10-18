@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.5.12",
+  "version": "0.6.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -75,6 +75,18 @@
       "title": "Maximum Jev request tokens",
       "description": "Estimated token budget for state plus questions in one Jev request.",
       "default": 30000
+    },
+    "maxQuestionsPerRequest": {
+      "type": "number",
+      "title": "Max questions per request",
+      "description": "Judge questions sent per request (call batches get half: two questions per call). Route limit 64; practical ceiling is the engine's 30s per-request abort at roughly 1.5s per question on a shared GPU.",
+      "default": 12
+    },
+    "askConcurrency": {
+      "type": "number",
+      "title": "Judge request concurrency",
+      "description": "Judge requests in flight at once; 2 matches Ollama's default parallel slots.",
+      "default": 2
     },
     "truncateHeadChars": {
       "type": "number",

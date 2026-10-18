@@ -116,6 +116,15 @@ export interface CompactOptions {
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
   maxRequestTokens?: number;
+  /**
+   * Max judge questions sent per request (call batches carry two questions
+   * per call, so their cap is half this). The System One route accepts at
+   * most 64; the practical ceiling is the host's 30s per-request fetch
+   * abort at ~1.5s per question on a shared GPU. Default 12.
+   */
+  maxQuestionsPerRequest?: number;
+  /** Judge requests in flight at once; 2 matches ollama's parallel slots. Default 2. */
+  askConcurrency?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
   /**
@@ -144,6 +153,8 @@ export interface ResolvedCompactOptions {
   targetTokens?: number;
   maxStateTokens: number;
   maxRequestTokens: number;
+  maxQuestionsPerRequest: number;
+  askConcurrency: number;
   truncateHeadChars: number;
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   trainingSource: 'live' | 'replay';

@@ -10,6 +10,7 @@ import {
   estimateTokens,
   fitState,
   JevClient,
+  messageChunkSize,
   parseJevResponse,
    reductionRatio,
    resolveOptions,
@@ -79,6 +80,8 @@ describe('options', () => {
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
+      maxQuestionsPerRequest: 12,
+      askConcurrency: 2,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -90,6 +93,16 @@ describe('options', () => {
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
     });
+  });
+
+  it('clamps the question cap to the route limit (64) and concurrency to at least 1', () => {
+    expect(resolveOptions({ maxQuestionsPerRequest: 500 })).toMatchObject({
+      maxQuestionsPerRequest: 64,
+    });
+    expect(resolveOptions({ maxQuestionsPerRequest: 0.9 })).toMatchObject({
+      maxQuestionsPerRequest: 1,
+    });
+    expect(resolveOptions({ askConcurrency: 0 })).toMatchObject({ askConcurrency: 1 });
   });
 });
 
@@ -239,7 +252,7 @@ describe('question batching', () => {
     isError: false,
     pinned: false,
   }));
-  const options = { maxRequestTokens: 30_000 };
+  const options = { maxRequestTokens: 30_000, maxQuestionsPerRequest: 12 };
 
   it('splits only on the call cap when tokens leave plenty of room', () => {
     const batches = batchCalls(calls, 1000, options);
@@ -252,6 +265,22 @@ describe('question batching', () => {
     const batches = batchCalls(many, 1000, options);
     expect(batches.map((b) => b.length)).toEqual([6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 3]);
     expect(batches.flat().map((c) => c.id)).toEqual(many.map((c) => c.id));
+  });
+
+  it('derives the call cap from maxQuestionsPerRequest (floor of half)', () => {
+    const wide = { ...options, maxQuestionsPerRequest: 24 };
+    const many: ToolCall[] = Array.from({ length: 30 }, (_, i) => ({ ...calls[0]!, id: `t${i}` }));
+    expect(batchCalls(many, 1000, wide).map((b) => b.length)).toEqual([12, 12, 6]);
+    const odd = { ...options, maxQuestionsPerRequest: 5 };
+    expect(batchCalls(calls, 1000, odd).map((b) => b.length)).toEqual([2, 2, 2, 2, 2]);
+  });
+
+  it('bounds the message chunk size by the question cap and the request budget', () => {
+    expect(messageChunkSize(1000, 30_000, 12)).toBe(12);
+    expect(messageChunkSize(1000, 30_000, 24)).toBe(24);
+    // ~28.9k room → 452 by token budget, 12 by cap
+    expect(messageChunkSize(1000, 30_000)).toBe(12);
+    expect(messageChunkSize(29_600, 30_000, 12)).toBeLessThanOrEqual(12);
   });
 
   it('splits questions across requests when the state leaves little room', () => {

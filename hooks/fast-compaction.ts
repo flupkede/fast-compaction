@@ -112,6 +112,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'preserveStartMessages',
     'maxStateTokens',
     'maxRequestTokens',
+    'maxQuestionsPerRequest',
+    'askConcurrency',
     'truncateHeadChars',
   ] as const) {
     const value = options[key];
