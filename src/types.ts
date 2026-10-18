@@ -125,6 +125,14 @@ export interface CompactOptions {
   maxQuestionsPerRequest?: number;
   /** Judge requests in flight at once; 2 matches ollama's parallel slots. Default 2. */
   askConcurrency?: number;
+  /**
+   * Stop asking the judge once this many milliseconds have passed: unanswered
+   * candidates stay (conservative) and `stats.partial` marks the result, so a
+   * huge first compaction finishes inside the host's hook budget and the
+   * remainder is judged by the next compaction. 0 skips every batch;
+   * undefined = unlimited.
+   */
+  timeBudgetMs?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
   /**
@@ -155,6 +163,7 @@ export interface ResolvedCompactOptions {
   maxRequestTokens: number;
   maxQuestionsPerRequest: number;
   askConcurrency: number;
+  timeBudgetMs?: number;
   truncateHeadChars: number;
   trainingLog?: (record: TrainingRecord) => void | Promise<void>;
   trainingSource: 'live' | 'replay';
@@ -185,6 +194,9 @@ export interface CompactResult {
     stateStage: string;
     requests: number;
     ms: number;
+    /** True when `timeBudgetMs` ran out: unanswered candidates were kept and
+     * the next compaction judges the remainder. */
+    partial?: boolean;
     /** Summed judge-reported timing over the requests that carried it (ollama behind a shim). */
     judge?: {
       requests: number;

@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -87,6 +87,12 @@
       "title": "Judge request concurrency",
       "description": "Judge requests in flight at once; 2 matches Ollama's default parallel slots.",
       "default": 2
+    },
+    "timeBudgetMs": {
+      "type": "number",
+      "title": "Compaction time budget (ms)",
+      "description": "Stop asking the judge after this long: unanswered candidates stay and the next compaction judges the remainder, so even a huge first compaction returns a partial result inside the engine's hook budget instead of being killed.",
+      "default": 90000
     },
     "truncateHeadChars": {
       "type": "number",

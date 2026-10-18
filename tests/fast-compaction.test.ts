@@ -493,6 +493,40 @@ describe('compact', () => {
     expect(output.stats.requests).toBeGreaterThan(0);
   });
 
+  it('keeps everything unjudged when the time budget is already spent', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      message('user', 'seed'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'),
+      result('tool-1', 'body'),
+      message('user', 'latest'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.9, seen), {
+      timeBudgetMs: 0,
+      preserveRecentMessages: 1,
+    });
+    expect(seen).toHaveLength(0);
+    expect(output.stats.requests).toBe(0);
+    expect(output.stats.partial).toBe(true);
+    // nothing dropped: unanswered candidates stay
+    expect(output.messages).toHaveLength(messages.length);
+  });
+
+  it('judges normally without a time budget', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      message('user', 'seed'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'),
+      result('tool-1', 'body'),
+      message('user', 'latest'),
+    ];
+    const output = await compact(messages, fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 1,
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(output.stats.partial).toBeUndefined();
+  });
+
   it('judges pure-chat prose even with no tool calls at all', async () => {
     const seen: Seen[] = [];
     const messages = [

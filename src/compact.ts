@@ -72,6 +72,10 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       1,
       Math.floor(finite(options.askConcurrency, DEFAULT_OPTIONS.askConcurrency)),
     ),
+    timeBudgetMs:
+      typeof options.timeBudgetMs === 'number' && Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs >= 0
+        ? options.timeBudgetMs
+        : undefined,
     truncateHeadChars: Math.max(
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
@@ -545,12 +549,18 @@ export async function compact(
   let fitted: FittedState | undefined;
   let batches: ToolCall[][] = [];
   let callJudge: JudgeTiming[] = [];
+  let partial = false;
   const answers = new Map<string, CallAnswer>();
   const messageAnswers = new Map<number, number>();
   let proseEntries: HistoryEntry[] = [];
   let messageCandidates: HistoryEntry[] = [];
   const protectedIndex = (i: number): boolean =>
     isPinned(i, messages.length, resolved.preserveRecentMessages, resolved.preserveStartMessages);
+  // piece-wise compaction: stop asking in time, keep the unanswered, let the
+  // next compaction judge the remainder (a virgin fat window cannot fit the
+  // host's hook budget in one pass)
+  const deadline = resolved.timeBudgetMs === undefined ? undefined : started + resolved.timeBudgetMs;
+  const outOfTime = (): boolean => deadline !== undefined && Date.now() >= deadline;
   if (candidates.length > 0) {
     const state = fitState(messages, calls, stateFitOptions(resolved));
     fitted = state;
@@ -559,7 +569,13 @@ export async function compact(
     const answeredCall = await pooled(
       batches,
       resolved.askConcurrency,
-      (batch) => askBatch(asker, state.state, batch, judgeTimings),
+      (batch) => {
+        if (outOfTime()) {
+          partial = true;
+          return Promise.resolve(new Map<string, CallAnswer>());
+        }
+        return askBatch(asker, state.state, batch, judgeTimings);
+      },
     );
     for (const map of answeredCall) {
       for (const [id, answer] of map) answers.set(id as string, answer as CallAnswer);
@@ -567,7 +583,10 @@ export async function compact(
     callJudge = judgeTimings;
   }
   // prose entries present in the fitted state, outside the protected window
-  if (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0)) {
+  if (
+    !outOfTime() &&
+    (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0))
+  ) {
     fitted = fitted ?? fitState(messages, calls, stateFitOptions(resolved));
     proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
     messageCandidates = proseEntries.filter((entry) => !protectedIndex(entry.i));
@@ -672,17 +691,10 @@ export async function compact(
       budgetEvictions,
       stateTokens: (fitted ?? EMPTY_FITTED).tokens,
       stateStage: (fitted ?? EMPTY_FITTED).stage,
-      requests:
-        batches.length +
-        Math.ceil(
-          messageCandidates.length /
-            messageChunkSize(
-              (fitted ?? EMPTY_FITTED).tokens,
-              resolved.maxRequestTokens,
-              resolved.maxQuestionsPerRequest,
-            ),
-        ),
+      // actually asked, not planned: a time budget can skip planned batches
+      requests: callJudge.length,
       ms: Date.now() - started,
+      ...(partial ? { partial: true } : {}),
       judge,
     },
   };
