@@ -499,6 +499,23 @@ export async function hotOptions(
   return fallback;
 }
 
+const KNOBS = [
+  'keepThreshold',
+  'maxRequestTokens',
+  'maxQuestionsPerRequest',
+  'askConcurrency',
+  'compactAtPercent',
+  'minReductionRatio',
+  'jevTimeoutMs',
+  'model',
+  'baseUrl',
+] as const;
+
+/** The tunable knobs as a comparable string, to spot mid-session settings edits. */
+export function knobSnapshot(config: Pick<HookConfig, (typeof KNOBS)[number]>): string {
+  return JSON.stringify(KNOBS.map((key) => config[key]));
+}
+
 function notify(
   $: {
     ui: {
@@ -545,6 +562,8 @@ export const register: Register = (on: On, options: PluginOptions) => {
   // attempt once per turn.complete and re-arm on rejection; the next turn's
   // end is a fresh invocation with a fresh budget.
   let pendingCompact: 'force' | 'auto' | null = null;
+  // snapshot of the tunable knobs, to notice mid-session settings edits
+  let lastKnobs: string | undefined;
 
   on('session.start', async ($, event, next) => {
     try {
@@ -561,6 +580,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
       });
       await evictOldStats($, await $.clock.now());
       const live = resolveHookConfig(await hotOptions($, options));
+      lastKnobs = knobSnapshot(live);
       $.ui.log(
         `fast-compaction live: keepThreshold ${live.keepThreshold}, ` +
           `maxQuestionsPerRequest ${live.maxQuestionsPerRequest ?? 12}, ` +
@@ -673,6 +693,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     const configured = resolveHookConfig(await hotOptions($, options));
+    const snapshot = knobSnapshot(configured);
+    if (lastKnobs !== undefined && snapshot !== lastKnobs) {
+      $.ui.log('fast-compaction: settings changed live — new values apply from this turn');
+    }
+    lastKnobs = snapshot;
     const answer = await next(event);
     let trigger = pendingCompact;
     pendingCompact = null;
