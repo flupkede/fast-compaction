@@ -317,7 +317,7 @@ function timingLine(stats: SessionStats, judgeCount: number): string | undefined
   return `Timing       avg per judge compaction: ${parts.join(' + ')}`;
 }
 
-export function formatReport(stats: SessionStats, scope: string, sessionCount: number, recent = 5): string {
+export function formatReport(stats: SessionStats, scope: string, sessionCount: number, recent = 10): string {
   const c = stats.compactions;
   const u = sumUsage(stats.main, stats.agents);
   const sent = u.input + u.cacheRead + u.cacheWrite;
@@ -333,7 +333,7 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
       fallbacks > 0 ? `${fallbacks} fallback (${c['fallback-low']} low reduction, ${c['fallback-error']} error)` : 'no fallbacks'
     }`,
     `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} input-eq. tokens ≈ $${(weightedSaved(stats.savedTokens, stats.main) / 1e6 * 3).toFixed(2)} at $3/M input (estimate)`,
-    `Cost         $${stats.costUsd.toFixed(2)} actually reported · ${u.turns} turns · avg ${avgContext} input tokens/turn (incl. cache) · cache hit ${hit} of input`,
+    `Cost         $${stats.costUsd.toFixed(2)} reported across ${sessionCount} session(s) · ${u.turns} turns · avg ${avgContext} input tokens/turn (incl. cache) · cache hit ${hit} of input`,
   ];
   const timing = timingLine(stats, c.judge);
   if (timing) lines.push(timing);
