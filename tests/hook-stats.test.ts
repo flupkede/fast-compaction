@@ -64,7 +64,7 @@ describe(`/${STATS_COMMAND}`, () => {
     expect(all).toContain('1 fallback (0 low reduction, 1 error)');
     const own = await statsCommand({ store }, ' Session ', 'mine', 0);
     expect(own).toContain('this session, 1 session(s)');
-    expect(own).toContain('Saved        ~6K tokens at input price');
+    expect(own).toContain('Saved        ~6K input-eq. tokens ≈ $0.02 at $3/M input');
   });
 
   it('resets only stats keys and rejects unknown arguments', async () => {

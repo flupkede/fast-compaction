@@ -332,8 +332,8 @@ export function formatReport(stats: SessionStats, scope: string, sessionCount: n
     `Compactions  ${c.judge} by judge${c.judge > 0 ? ` · judge avg ${avgMs} ms` : ''} · ${
       fallbacks > 0 ? `${fallbacks} fallback (${c['fallback-low']} low reduction, ${c['fallback-error']} error)` : 'no fallbacks'
     }`,
-    `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} tokens at input price (estimate)`,
-    `Cost         $${stats.costUsd.toFixed(2)} · ${u.turns} turns · avg ${avgContext} context per turn · cache hit ${hit}`,
+    `Saved        ~${formatTokens(weightedSaved(stats.savedTokens, stats.main))} input-eq. tokens ≈ $${(weightedSaved(stats.savedTokens, stats.main) / 1e6 * 3).toFixed(2)} at $3/M input (estimate)`,
+    `Cost         $${stats.costUsd.toFixed(2)} actually reported · ${u.turns} turns · avg ${avgContext} input tokens/turn (incl. cache) · cache hit ${hit} of input`,
   ];
   const timing = timingLine(stats, c.judge);
   if (timing) lines.push(timing);

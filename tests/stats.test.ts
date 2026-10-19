@@ -95,8 +95,8 @@ describe('stats', () => {
     expect(total.recent.map((r) => r.outcome)).toEqual(['judge', 'fallback-error']);
     const report = formatReport(total, 'all sessions', 2);
     expect(report).toContain('1 by judge · judge avg 600 ms · 1 fallback (0 low reduction, 1 error)');
-    expect(report).toContain('Saved        ~7K tokens at input price');
-    expect(report).toContain('1 turns · avg 100K context per turn · cache hit 99.0%');
+    expect(report).toContain('Saved        ~7K input-eq. tokens ≈ $0.02 at $3/M input');
+    expect(report).toContain('1 turns · avg 100K input tokens/turn (incl. cache) · cache hit 99.0% of input');
     expect(report).toContain('$1.25');
     expect(report).toContain('167K → 100K  40%  600 ms');
     expect(report).not.toContain('Timing');
