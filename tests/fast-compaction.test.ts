@@ -463,11 +463,10 @@ describe('compact', () => {
     expect(seen.flatMap((r) => r.questions).filter((q) => q.startsWith('msg_')).sort()).toEqual([
       'msg_3',
     ]);
+    // messageDecisions covers slice prose only (seed/recent/user prose sit
+    // outside the slices and survive untouched)
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 3, keep: false, reason: 'dropped' }),
-      expect.objectContaining({ i: 4, keep: true, reason: 'user' }),
-      expect.objectContaining({ i: 5, keep: true, reason: 'user' }),
     ]);
     // the dropped assistant note vanishes entirely (prose only); the kept array shifts
     expect(output.messages).toHaveLength(5);
@@ -495,11 +494,9 @@ describe('compact', () => {
     // only the assistant entry is judgeable — user prose is never asked about
     expect(seen.flatMap((r) => r.questions).filter((q) => q.startsWith('msg_'))).toEqual(['msg_4']);
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
+      // index 1 sits inside the slice as user prose: protected, never judged
       expect.objectContaining({ i: 1, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 4, keep: false, reason: 'dropped' }),
-      expect.objectContaining({ i: 5, keep: true, reason: 'user' }),
-      expect.objectContaining({ i: 6, keep: true, reason: 'user' }),
     ]);
     expect(output.messages.some((m) => m.text === 'old task instructions nobody may lose')).toBe(true);
     expect(output.messages.some((m) => m.text === 'old rambling nobody needs')).toBe(false);
@@ -531,6 +528,34 @@ describe('compact', () => {
     });
     expect(output.stats.stateTokens).toBeLessThanOrEqual(19_000 - 20 - 320);
     expect(output.stats.requests).toBeGreaterThan(0);
+  });
+
+  it('judges a window larger than the ceiling in faithful slices', async () => {
+    // regression: the one-shot state fit collapsed the whole window into
+    // placeholders and the judge dropped everything it could not see
+    const seen: Seen[] = [];
+    const messages = [message('user', 'seed')];
+    for (let i = 0; i < 8; i += 1) {
+      // prose travels to the judge un-abridged, so big notes force slices
+      messages.push(
+        message('assistant', `old note ${i} `.repeat(400)),
+        call(`tool-${i}`, 'Read', { file_path: `src/file${i}.ts` }, 'x'),
+        result(`tool-${i}`, 'short body'),
+      );
+    }
+    messages.push(message('user', 'latest'));
+    const output = await compact(messages, fakeJev(() => 0.9, seen), {
+      maxStateTokens: 2_000, // far below the window: forces multiple slices
+      preserveRecentMessages: 1,
+    });
+    expect(seen.length).toBeGreaterThan(1);
+    expect(output.stats.slices).toBeGreaterThan(1);
+    // the judge saw real content, never the collapse placeholder
+    for (const ask of seen) {
+      const text = JSON.stringify((ask.state as { history?: unknown[] }).history ?? ask.state);
+      expect(text).not.toContain('chars omitted');
+      expect(text).toContain('old note');
+    }
   });
 
   it('keeps everything unjudged when the time budget is already spent', async () => {
@@ -617,9 +642,7 @@ describe('compact', () => {
     );
     expect(seen.flatMap((r) => r.questions).sort()).toEqual(['msg_1']);
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 1, keep: false, reason: 'dropped' }),
-      expect.objectContaining({ i: 2, keep: true, reason: 'user' }),
     ]);
     expect(output.messages).toHaveLength(2);
     expect(output.messages[1]?.text).toBe('latest question');
@@ -644,9 +667,7 @@ describe('compact', () => {
       },
     }, { preserveRecentMessages: 1 });
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 1, keep: true, reason: 'kept' }),
-      expect.objectContaining({ i: 2, keep: true, reason: 'user' }),
     ]);
     expect(output.messages).toHaveLength(3);
   });
@@ -699,11 +720,9 @@ describe('budget compaction', () => {
     expect(resultText('tool-3')).toContain('[fast-compaction truncated');
     expect(resultText('tool-2')).toBe('x'.repeat(6000));
     expect(output.messages[0]).toBe(messages[0]);
+    // slice prose only: 'ack' (index 1) sits before sliceStart and survives untouched
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'user'],
-      [1, true, 'recent'],
       [8, true, 'kept'],
-      [9, true, 'user'],
     ]);
     expect(output.stats.budgetEvictions).toBe(2);
   });
@@ -727,11 +746,8 @@ describe('budget compaction', () => {
       },
     }, { preserveRecentMessages: 1, targetTokens: transcriptTokens(messages) - 2 });
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'user'],
-      [1, true, 'recent'],
       [2, true, 'kept'],
       [3, false, 'budget'],
-      [4, true, 'user'],
     ]);
     expect(output.messages.map((m) => m.text)).toEqual([
       'seed context for the session',
@@ -759,10 +775,7 @@ describe('budget compaction', () => {
       ['t1', 'drop_call', 'budget'],
     ]);
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'user'],
-      [1, true, 'recent'],
       [4, false, 'budget'],
-      [5, true, 'user'],
     ]);
     expect(output.messages).toEqual([messages[0], messages[1], messages[5]]);
     expect(output.messages[0]).toBe(messages[0]);

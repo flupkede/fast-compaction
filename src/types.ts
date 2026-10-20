@@ -207,6 +207,9 @@ export interface CompactResult {
     partial?: boolean;
     /** Batches whose judge request failed; their candidates were kept. */
     batchErrors?: number;
+    /** Faithful-content slices the window was judged in; >1 only when the
+     * window exceeded the state ceiling. */
+    slices?: number;
     /** Summed judge-reported timing over the requests that carried it (ollama behind a shim). */
     judge?: {
       requests: number;

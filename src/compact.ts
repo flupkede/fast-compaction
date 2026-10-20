@@ -1,6 +1,6 @@
 import { noulAnswer } from './request.js';
 import { createStripper } from './strip.js';
-import { collectToolCalls, estimateTokens, fitState, isPinned } from './state.js';
+import { collectToolCalls, estimateTokens, fitState, goalFromMessages, isPinned, sliceRanges } from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -563,14 +563,15 @@ export async function compact(
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: FittedState | undefined;
-  let batches: ToolCall[][] = [];
   let callJudge: JudgeTiming[] = [];
+  const judgeTimings: JudgeTiming[] = [];
   let partial = false;
   let batchErrors = 0;
+  let sliceCount = 0;
   const answers = new Map<string, CallAnswer>();
   const messageAnswers = new Map<number, number>();
-  let proseEntries: HistoryEntry[] = [];
-  let messageCandidates: HistoryEntry[] = [];
+  const allProse: HistoryEntry[] = [];
+  const allMessageCandidates: HistoryEntry[] = [];
   const protectedIndex = (i: number): boolean =>
     isPinned(i, messages.length, resolved.preserveRecentMessages, resolved.preserveStartMessages);
   // piece-wise compaction: stop asking in time, keep the unanswered, let the
@@ -578,13 +579,52 @@ export async function compact(
   // host's hook budget in one pass)
   const deadline = resolved.timeBudgetMs === undefined ? undefined : started + resolved.timeBudgetMs;
   const outOfTime = (): boolean => deadline !== undefined && Date.now() >= deadline;
-  if (candidates.length > 0) {
-    const state = fitState(messages, calls, stateFitOptions(resolved));
-    fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
-    const judgeTimings: JudgeTiming[] = [];
+
+  // slice-wise judging: the unpinned middle is partitioned into ranges that
+  // each fit the state ceiling by faithful (un-collapsed) entry size, so the
+  // judge scores real content instead of `[… N chars omitted …]` placeholders
+  // (a collapsed state made it score everything droppable)
+  const goal = resolved.goal || goalFromMessages(messages, resolved.strip);
+  const sliceStart = Math.max(1, resolved.preserveStartMessages);
+  const sliceEnd = Math.max(sliceStart, messages.length - resolved.preserveRecentMessages);
+  const chunkOptions = {
+    ...stateFitOptions(resolved),
+    goal,
+    // the slice range is the protection; the fitter must be able to shrink
+    // freely inside a chunk and must never see global window sizes
+    preserveRecentMessages: 0,
+    preserveStartMessages: 0,
+  };
+  const ranges = sliceRanges(
+    messages,
+    calls,
+    chunkOptions.maxStateTokens,
+    sliceStart,
+    sliceEnd,
+    resolved.strip,
+  );
+  sliceCount = ranges.length;
+  for (const range of ranges) {
+    if (outOfTime()) {
+      partial = true;
+      break;
+    }
+    const chunkMessages = messages.slice(range.start, range.end);
+    // calls whose result lands beyond the range stay unjudged (conservative)
+    const chunkCalls = calls.filter(
+      (call) => call.callIndex >= range.start && call.callIndex < range.end && call.resultIndex < range.end,
+    );
+    const state = fitState(chunkMessages, chunkCalls, chunkOptions);
+    // fitState indexes within the chunk; shift to global message indices
+    state.state.history = state.state.history.map((entry) => ({
+      ...entry,
+      i: entry.i + range.start,
+    }));
+    fitted = fitted ?? state;
+    const sliceCandidates = chunkCalls.filter((call) => !call.pinned);
+    const sliceBatches = batchCalls(sliceCandidates, state.tokens, resolved);
     const answeredCall = await pooled(
-      batches,
+      sliceBatches,
       resolved.askConcurrency,
       (batch) => {
         if (outOfTime()) {
@@ -603,28 +643,22 @@ export async function compact(
     for (const map of answeredCall) {
       for (const [id, answer] of map) answers.set(id as string, answer as CallAnswer);
     }
-    callJudge = judgeTimings;
-  }
-  // prose entries present in the fitted state, outside the protected window
-  if (
-    !outOfTime() &&
-    (candidates.length > 0 || messages.some((m) => m.text.trim().length > 0))
-  ) {
-    fitted = fitted ?? fitState(messages, calls, stateFitOptions(resolved));
-    proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
+    // prose entries present in the fitted state, outside the protected window;
     // user prose carries the task instructions: never judged, never dropped
-    // (observed live: a collapsed state made the judge drop them all and the
-    // agent lost its task)
-    messageCandidates = proseEntries.filter(
+    const proseEntries = state.state.history.filter((entry) => entry.text.trim().length > 0);
+    const messageCandidates = proseEntries.filter(
       (entry) => entry.role !== 'user' && !protectedIndex(entry.i),
     );
-    // note: prose entries the fitter left out entirely (late shrink stage on
-    // very large histories) are never judged and survive compaction untouched
+    allProse.push(...proseEntries);
+    allMessageCandidates.push(...messageCandidates);
+    if (outOfTime()) {
+      partial = true;
+      break;
+    }
     const messageChunks = chunk(
       messageCandidates,
-      messageChunkSize(fitted.tokens, resolved.maxRequestTokens, resolved.maxQuestionsPerRequest),
+      messageChunkSize(state.tokens, resolved.maxRequestTokens, resolved.maxQuestionsPerRequest),
     );
-    const fittedState = fitted.state;
     const answeredMessages = await pooled(
       messageChunks,
       resolved.askConcurrency,
@@ -633,7 +667,7 @@ export async function compact(
           partial = true;
           return Promise.resolve(new Map<number, number>());
         }
-        return askMessageBatch(asker, fittedState, batch, callJudge).catch((error: unknown) => {
+        return askMessageBatch(asker, state.state, batch, judgeTimings).catch((error: unknown) => {
           if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
           partial = true;
           batchErrors += 1;
@@ -645,6 +679,9 @@ export async function compact(
       for (const [i, noul] of map) messageAnswers.set(i, noul);
     }
   }
+  const proseEntries = allProse;
+  const messageCandidates = allMessageCandidates;
+  callJudge = judgeTimings;
 
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
@@ -733,6 +770,7 @@ export async function compact(
       // actually asked, not planned: a time budget can skip planned batches
       requests: callJudge.length,
       ms: Date.now() - started,
+      ...(sliceCount > 1 ? { slices: sliceCount } : {}),
       ...(partial ? { partial: true } : {}),
       ...(batchErrors > 0 ? { batchErrors } : {}),
       judge,

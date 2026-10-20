@@ -319,8 +319,87 @@ export function fitState(
   perEntry = history.map(entryTokens);
   tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   if (fits()) return fitted(history, tokens, 'old calls merged');
-
   throw new Error(
     `history too large for the judge (~${tokens} tokens after truncation, limit ${options.maxStateTokens})`,
   );
+}
+
+/**
+ * Partitions the unpinned middle (sliceStart..sliceEnd) into message ranges
+ * that each fit the state ceiling by their faithful (un-collapsed) entry
+ * sizes, so the judge judges real content instead of collapse placeholders.
+ * Calls whose result lies beyond the range end are left out of a range on
+ * purpose: they stay unjudged (conservative) instead of straddling a border.
+ */
+export function sliceRanges(
+  messages: readonly Message[],
+  calls: readonly ToolCall[],
+  ceiling: number,
+  sliceStart: number,
+  sliceEnd: number,
+  strip?: Stripper,
+): Array<{ start: number; end: number }> {
+  if (sliceEnd <= sliceStart) return [];
+  const rangeCalls = calls.filter(
+    (call) => !call.pinned && call.callIndex >= sliceStart && call.callIndex < sliceEnd,
+  );
+  // historyEntries indexes by position in the array it receives: rebase the
+  // calls to the slice, or call/result entries land on the wrong messages
+  const relativeCalls = rangeCalls
+    .filter((call) => call.resultIndex < sliceEnd)
+    .map((call) => ({
+      ...call,
+      callIndex: call.callIndex - sliceStart,
+      resultIndex: call.resultIndex - sliceStart,
+    }));
+  const entries = historyEntries(
+    messages.slice(sliceStart, sliceEnd),
+    relativeCalls,
+    INPUT_CHARS[0],
+    strip,
+  );
+  const entrySize = (entry: HistoryEntry): number => estimateTokens(JSON.stringify(entry)) + 1;
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  let first = 0;
+  let acc = 0;
+  let index = 0;
+  while (index < entries.length) {
+    const entry = entries[index]!;
+    const size = entrySize(entry);
+    if (acc > 0 && acc + size > ceiling) {
+      const rangeStart = entries[first]!.i + sliceStart;
+      const boundary = entry.i + sliceStart;
+      // never split between a call and its result: extend the range past the
+      // result instead — one result of ceiling overshoot beats a call
+      // stranded outside every range. Only calls INSIDE the closing range
+      // count: without the callIndex bound every later call matches and the
+      // reach swallows the whole window in one range.
+      const straddled = rangeCalls.filter(
+        (call) =>
+          call.callIndex >= rangeStart &&
+          call.callIndex < boundary &&
+          call.resultIndex >= boundary &&
+          call.resultIndex < sliceEnd,
+      );
+      if (straddled.length > 0) {
+        const reach = Math.max(...straddled.map((call) => call.resultIndex + 1));
+        ranges.push({ start: rangeStart, end: reach });
+        const next = entries.findIndex((e) => e.i + sliceStart >= reach);
+        index = next === -1 ? entries.length : next;
+        first = index;
+        acc = 0;
+        continue;
+      }
+      ranges.push({ start: rangeStart, end: boundary });
+      first = index;
+      acc = 0;
+    }
+    acc += size;
+    index += 1;
+  }
+  if (first < entries.length) {
+    ranges.push({ start: entries[first]!.i + sliceStart, end: sliceEnd });
+  }
+  return ranges;
 }

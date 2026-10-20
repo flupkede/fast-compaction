@@ -38,13 +38,15 @@ shapes, not arbitrary confidential text.
 2. The **state** sent to judge is the whole conversation so far, oldest first,
    with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
    Tool inputs are included, texts are included, nothing is summarized.
-3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
-   applied only if the previous one was not enough: tool inputs truncated to
-   1000, then 200, then 60 characters; long texts abridged to head + tail,
-   oldest non-pinned messages first; old non-pinned messages collapsed to a
-   `[… N chars omitted …]` note; old tool calls reduced to one line each
-   (`t12 Read file_path=src/a.ts → ok 480ch`); old call-less messages left
-   out; runs of old call-only messages folded into one entry. If it still
+3. The unpinned middle of the conversation is partitioned into **slices** that
+   each fit `maxStateTokens` (25k by default) by their faithful entry sizes,
+   and every slice is judged on its real content — the judge never sees a
+   collapsed whole-window state. The fitting stages (tool inputs truncated to
+   1000, then 200, then 60 characters; long texts abridged to head + tail;
+   old non-pinned messages collapsed to a `[… N chars omitted …]` note; old
+   tool calls reduced to one line each; old call-less messages left out; runs
+   of old call-only messages folded into one entry) remain only as a last
+   resort inside a single slice that is still too large. If even that
    does not fit, compaction throws. Tokens are estimated without a tokenizer (a
    word per six letters, half a token per digit, ~one per other symbol),
    calibrated to land a little above the counts judge reports.
