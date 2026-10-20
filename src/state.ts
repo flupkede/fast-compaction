@@ -221,6 +221,7 @@ export const STAGE_ORDER = [
   'texts abridged',
   'old messages collapsed',
   'old calls compacted',
+  'old messages left out',
   'old calls merged',
 ];
 

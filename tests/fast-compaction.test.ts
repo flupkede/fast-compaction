@@ -11,6 +11,7 @@ import {
   estimateTokens,
   fitState,
   sliceRanges,
+  worseStage,
   JevClient,
   messageChunkSize,
   parseJevResponse,
@@ -137,6 +138,15 @@ describe('tool call collection', () => {
 });
 
 describe('state fitting', () => {
+  it('ranks every fitState stage name so worseStage never demotes a real one', () => {
+    // a stage missing from STAGE_ORDER would rank as unknown → mildest and
+    // hide a slice's real collapse level in the run stats
+    expect(worseStage('full', 'old messages left out')).toBe('old messages left out');
+    expect(worseStage('old messages left out', 'full')).toBe('old messages left out');
+    expect(worseStage('old calls compacted', 'old messages left out')).toBe('old messages left out');
+    expect(worseStage('old messages left out', 'old calls merged')).toBe('old calls merged');
+  });
+
   it('sends the whole history with tool results replaced by a note', () => {
     const messages = transcript();
     const { state, stage } = fitState(messages, collectToolCalls(messages, 0), fit);
