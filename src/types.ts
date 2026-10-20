@@ -257,7 +257,7 @@ export interface MessageDecision {
   /** Characters of prose the entry carried when judged. */
   chars: number;
   keep: boolean;
-  reason: 'kept' | 'dropped' | 'recent' | 'budget';
+  reason: 'kept' | 'dropped' | 'recent' | 'budget' | 'user';
 }
 
 /** The `state` of a Jev request: a string or any JSON-serialisable object. */

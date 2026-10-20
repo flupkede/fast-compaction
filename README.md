@@ -61,6 +61,11 @@ shapes, not arbitrary confidential text.
    - else `keepCall ≥ threshold` → keep the call, truncate the result to its
      first `truncateHeadChars` characters plus a one-line note;
    - else → remove the call together with its result.
+
+   Conversation prose is judged the same way (one `noul` question per entry).
+   **User-role prose is never judged and never dropped** — your task
+   instructions survive every compaction, and they are exempt from the token
+   budget too. Only assistant prose is judgeable.
 7. The message list is rebuilt: a message that loses all its content is
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.

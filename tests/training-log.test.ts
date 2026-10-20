@@ -76,13 +76,13 @@ describe('compact training log', () => {
       'call_t1',
       'result_t1',
     ]);
-    expect(Object.keys(record.messageQuestions ?? {}).sort()).toEqual(['msg_3', 'msg_4']);
+    expect(Object.keys(record.messageQuestions ?? {}).sort()).toEqual(['msg_3']);
     // keys are msg_<i>, matching the messageQuestions join
-    expect(Object.keys(record.messageAnswers ?? {}).sort()).toEqual(['msg_3', 'msg_4']);
+    expect(Object.keys(record.messageAnswers ?? {}).sort()).toEqual(['msg_3']);
     expect(record.messageDecisions?.map((d) => [d.i, d.reason])).toEqual([
-      [0, 'recent'],
+      [0, 'user'],
       [3, 'kept'],
-      [4, 'kept'],
+      [4, 'user'],
     ]);
     expect(record.answers).toEqual({ t1: { keepCall: 0.9, keepResult: 0.9 } });
     expect(record.decisions).toEqual(result.decisions);

@@ -7,6 +7,7 @@ import {
   compact,
   compactMessages,
   decideCall,
+  decideMessage,
   estimateTokens,
   fitState,
   JevClient,
@@ -308,6 +309,16 @@ describe('decisions', () => {
     });
   });
 
+  it('never drops user prose, asked or not', () => {
+    const entry = { i: 2, role: 'user' as const, text: 'instructions' };
+    expect(decideMessage(entry, undefined, options)).toMatchObject({ keep: true, reason: 'user' });
+    expect(decideMessage(entry, 0, options)).toMatchObject({ keep: true, reason: 'user' });
+    expect(decideMessage({ ...entry, role: 'assistant' }, 0, options)).toMatchObject({
+      keep: false,
+      reason: 'dropped',
+    });
+  });
+
   it('removes dropped calls and truncates dropped results', () => {
     const messages = transcript();
     messages[4]!.toolUses[0]!.text = 'x'.repeat(2000);
@@ -453,16 +464,45 @@ describe('compact', () => {
       'msg_3',
     ]);
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 3, keep: false, reason: 'dropped' }),
-      expect.objectContaining({ i: 4, keep: true, reason: 'recent' }),
-      expect.objectContaining({ i: 5, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 4, keep: true, reason: 'user' }),
+      expect.objectContaining({ i: 5, keep: true, reason: 'user' }),
     ]);
     // the dropped assistant note vanishes entirely (prose only); the kept array shifts
     expect(output.messages).toHaveLength(5);
     expect(output.messages[0]?.text).toBe('old context nobody needs');
     expect(output.messages[3]?.text).toBe('recent instruction');
     expect(output.stats).toMatchObject({ messagesDropped: 1 });
+  });
+
+  it('never judges user prose: task instructions survive, assistant prose is judged', async () => {
+    const seen: Seen[] = [];
+    const messages = [
+      message('user', 'seed'),
+      message('user', 'old task instructions nobody may lose'),
+      call('tool-1', 'Read', { file_path: 'src/a.ts' }, 'x'),
+      result('tool-1', 'file body'),
+      message('assistant', 'old rambling nobody needs'),
+      message('user', 'recent instruction'),
+      message('user', 'latest question'),
+    ];
+    const output = await compact(
+      messages,
+      fakeJev(() => 0, seen),
+      { preserveRecentMessages: 2 },
+    );
+    // only the assistant entry is judgeable — user prose is never asked about
+    expect(seen.flatMap((r) => r.questions).filter((q) => q.startsWith('msg_'))).toEqual(['msg_4']);
+    expect(output.messageDecisions).toEqual([
+      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
+      expect.objectContaining({ i: 1, keep: true, reason: 'user' }),
+      expect.objectContaining({ i: 4, keep: false, reason: 'dropped' }),
+      expect.objectContaining({ i: 5, keep: true, reason: 'user' }),
+      expect.objectContaining({ i: 6, keep: true, reason: 'user' }),
+    ]);
+    expect(output.messages.some((m) => m.text === 'old task instructions nobody may lose')).toBe(true);
+    expect(output.messages.some((m) => m.text === 'old rambling nobody needs')).toBe(false);
   });
 
   it('keeps everything without calling Jev when nothing is judgeable', async () => {
@@ -577,9 +617,9 @@ describe('compact', () => {
     );
     expect(seen.flatMap((r) => r.questions).sort()).toEqual(['msg_1']);
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 1, keep: false, reason: 'dropped' }),
-      expect.objectContaining({ i: 2, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 2, keep: true, reason: 'user' }),
     ]);
     expect(output.messages).toHaveLength(2);
     expect(output.messages[1]?.text).toBe('latest question');
@@ -604,9 +644,9 @@ describe('compact', () => {
       },
     }, { preserveRecentMessages: 1 });
     expect(output.messageDecisions).toEqual([
-      expect.objectContaining({ i: 0, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 0, keep: true, reason: 'user' }),
       expect.objectContaining({ i: 1, keep: true, reason: 'kept' }),
-      expect.objectContaining({ i: 2, keep: true, reason: 'recent' }),
+      expect.objectContaining({ i: 2, keep: true, reason: 'user' }),
     ]);
     expect(output.messages).toHaveLength(3);
   });
@@ -660,10 +700,10 @@ describe('budget compaction', () => {
     expect(resultText('tool-2')).toBe('x'.repeat(6000));
     expect(output.messages[0]).toBe(messages[0]);
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'recent'],
+      [0, true, 'user'],
       [1, true, 'recent'],
       [8, true, 'kept'],
-      [9, true, 'recent'],
+      [9, true, 'user'],
     ]);
     expect(output.stats.budgetEvictions).toBe(2);
   });
@@ -687,11 +727,11 @@ describe('budget compaction', () => {
       },
     }, { preserveRecentMessages: 1, targetTokens: transcriptTokens(messages) - 2 });
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'recent'],
+      [0, true, 'user'],
       [1, true, 'recent'],
       [2, true, 'kept'],
       [3, false, 'budget'],
-      [4, true, 'recent'],
+      [4, true, 'user'],
     ]);
     expect(output.messages.map((m) => m.text)).toEqual([
       'seed context for the session',
@@ -719,10 +759,10 @@ describe('budget compaction', () => {
       ['t1', 'drop_call', 'budget'],
     ]);
     expect(output.messageDecisions.map((d) => [d.i, d.keep, d.reason])).toEqual([
-      [0, true, 'recent'],
+      [0, true, 'user'],
       [1, true, 'recent'],
       [4, false, 'budget'],
-      [5, true, 'recent'],
+      [5, true, 'user'],
     ]);
     expect(output.messages).toEqual([messages[0], messages[1], messages[5]]);
     expect(output.messages[0]).toBe(messages[0]);

@@ -202,8 +202,9 @@ export function decideCall(
 
 /**
  * Folds one message judgement into a decision. `undefined` means the entry was
- * never asked about (protected window) and always stays; `null` means it was
- * asked about but the judge gave no answer — kept, conservatively.
+ * never asked about (protected window, or user prose — task instructions are
+ * never dropped) and always stays; `null` means it was asked about but the
+ * judge gave no answer — kept, conservatively.
  */
 export function decideMessage(
   entry: Pick<HistoryEntry, 'i' | 'role' | 'text'>,
@@ -212,7 +213,12 @@ export function decideMessage(
 ): MessageDecision {
   const base = { i: entry.i, role: entry.role, chars: entry.text.length };
   if (keepProbability === undefined) {
-    return { ...base, keep: true, reason: 'recent' };
+    return { ...base, keep: true, reason: entry.role === 'user' ? 'user' : 'recent' };
+  }
+  if (entry.role === 'user') {
+    // defence in depth: user prose is never judgeable, so this only fires on
+    // a stale answer for an entry that left the candidate set
+    return { ...base, keep: true, reason: 'user' };
   }
   if (keepProbability === null) {
     return { ...base, keep: true, reason: 'kept' };
@@ -470,10 +476,11 @@ function applyBudget(
     (index) => decisions[index]!.keepCall,
     (index) => index,
   );
-  // never-answered prose was never scored: it ranks below every judged entry
+  // never-answered prose was never scored: it ranks below every judged entry;
+  // user prose (reason 'user') is exempt — task instructions survive the budget
   const prose = ranked(
     messageDecisions.flatMap((decision, index) =>
-      decision.keep && decision.reason !== 'recent' ? [index] : [],
+      decision.keep && decision.reason !== 'recent' && decision.reason !== 'user' ? [index] : [],
     ),
     (index) => messageAnswers.get(messageDecisions[index]!.i) ?? 0,
     (index) => messageDecisions[index]!.i,
@@ -605,7 +612,12 @@ export async function compact(
   ) {
     fitted = fitted ?? fitState(messages, calls, stateFitOptions(resolved));
     proseEntries = fitted.state.history.filter((entry) => entry.text.trim().length > 0);
-    messageCandidates = proseEntries.filter((entry) => !protectedIndex(entry.i));
+    // user prose carries the task instructions: never judged, never dropped
+    // (observed live: a collapsed state made the judge drop them all and the
+    // agent lost its task)
+    messageCandidates = proseEntries.filter(
+      (entry) => entry.role !== 'user' && !protectedIndex(entry.i),
+    );
     // note: prose entries the fitter left out entirely (late shrink stage on
     // very large histories) are never judged and survive compaction untouched
     const messageChunks = chunk(
