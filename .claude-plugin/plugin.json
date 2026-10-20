@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -93,6 +93,18 @@
       "title": "Compaction time budget (ms)",
       "description": "Stop asking the judge after this long: unanswered candidates stay and the next compaction judges the remainder. Leave empty to derive it: judge timeout minus 40s, capped at 110s (engine kills hooks at ~2min).",
       "default": ""
+    },
+    "toolCallLimit": {
+      "type": "number",
+      "title": "Repeated tool call limit",
+      "description": "Max calls of one tool within the window before further calls are denied with guidance (a tool flooding the context causes autocompact thrashing). 0 disables.",
+      "default": 30
+    },
+    "toolCallWindowMs": {
+      "type": "number",
+      "title": "Tool call limit window (ms)",
+      "description": "Sliding window for the repeated tool call limit; old calls are forgotten after this.",
+      "default": 900000
     },
     "truncateHeadChars": {
       "type": "number",

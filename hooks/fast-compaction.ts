@@ -45,6 +45,10 @@ const HOOK_DEFAULTS = {
   targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
   judgeTimeoutMs: 8_000,
+  // mechanical self-restraint: a session flooding one tool drowns its own
+  // context (observed: 137 dam_browser calls, 746k chars, autocompact thrashing)
+  toolCallLimit: 30,
+  toolCallWindowMs: 900_000,
   // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   ollamaModel: 'clef-flash',
@@ -77,6 +81,10 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   targetFloorStepPercent: number;
   model: string;
   judgeTimeoutMs: number;
+  /** Max calls of one tool within toolCallWindowMs before the plugin denies
+   * further calls of that tool with guidance; 0 disables the limiter. */
+  toolCallLimit: number;
+  toolCallWindowMs: number;
   /**
    * Full System One endpoint to post to; when set, the request goes there
    * instead of the TypeSafe API and no API key is needed (e.g. a local
@@ -156,6 +164,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     judgeTimeoutMs:
       judgeTimeoutMs ??
       (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.judgeTimeoutMs),
+    toolCallLimit: optionNumber(options, 'toolCallLimit', HOOK_DEFAULTS.toolCallLimit),
+    toolCallWindowMs: optionNumber(options, 'toolCallWindowMs', HOOK_DEFAULTS.toolCallWindowMs),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -566,6 +576,32 @@ function logCompaction($: StatsHost, record: Omit<CompactionRecord, 'at'>): void
   withStats($, (stats, at) => void recordCompaction(stats, { ...record, at }));
 }
 
+/**
+ * Mechanical self-restraint: tracks per-tool call timestamps and denies a
+ * tool that fired more than `limit` times inside `windowMs` — a session
+ * flooding one tool drowns its own context (observed: 137 dam_browser
+ * calls, 746k chars, autocompact thrashing). Returns the deny reason, or
+ * null when the call may proceed.
+ */
+export function checkToolCall(
+  state: Map<string, number[]>,
+  tool: string,
+  now: number,
+  limit: number,
+  windowMs: number,
+): string | null {
+  if (limit <= 0) return null;
+  const stamps = (state.get(tool) ?? []).filter((t) => now - t < windowMs);
+  stamps.push(now);
+  state.set(tool, stamps);
+  if (stamps.length <= limit) return null;
+  return (
+    `fast-compaction: ${tool} called ${stamps.length}x within ${Math.round(windowMs / 60_000)} min — ` +
+    'this floods the context (autocompact thrashing). Narrow the query, paginate, or delegate bulk work to a subagent.' +
+    ` (plugin option toolCallLimit=${limit})`
+  );
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   // The host rejects $.session.compact() while a turn runs, and a hook
@@ -576,6 +612,33 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let pendingCompact: 'force' | 'auto' | null = null;
   // snapshot of the tunable knobs, to notice mid-session settings edits
   let lastKnobs: string | undefined;
+  // per-tool call timestamps within the current window (mechanical
+  // self-restraint: a session flooding one tool drowns its own context)
+  const toolCalls = new Map<string, number[]>();
+
+  on('tool.call', async ($, event, next) => {
+    try {
+      const tool = typeof event.tool === 'string' ? event.tool : undefined;
+      if (tool === undefined) return next(event);
+      const live = resolveHookConfig(await hotOptions($, options as PluginOptions));
+      const reason = checkToolCall(
+        toolCalls,
+        tool,
+        Date.now(),
+        live.toolCallLimit,
+        live.toolCallWindowMs,
+      );
+      if (reason !== null) {
+        $.ui.log(reason);
+        return { deny: reason };
+      }
+      return next(event);
+    } catch (error) {
+      // the limiter must never break tool use
+      $.ui.log(`tool.call limiter skipped (${error instanceof Error ? error.message : String(error)})`);
+      return next(event);
+    }
+  });
 
   on('session.start', async ($, event, next) => {
     try {

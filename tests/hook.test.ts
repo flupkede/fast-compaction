@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMPRESS_COMMAND,
+  checkToolCall,
   compactSession,
   decisionLog,
   decisionLogLines,
@@ -68,7 +69,8 @@ describe('hook config', () => {
       targetFloorStepPercent: 5,
       model: 'jev-latest',
       judgeTimeoutMs: 8000,
-
+      toolCallLimit: 30,
+      toolCallWindowMs: 900_000,
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
@@ -84,7 +86,8 @@ describe('hook config', () => {
       targetFloorMinPercent: 25,
       targetFloorStepPercent: 5,
       judgeTimeoutMs: 8000,
-
+      toolCallLimit: 30,
+      toolCallWindowMs: 900_000,
     });
   });
 
@@ -99,6 +102,8 @@ describe('hook config', () => {
       baseUrl: 'http://localhost:11434/v1/systemone',
       model: 'clef-flash',
       judgeTimeoutMs: 600000,
+      toolCallLimit: 30,
+      toolCallWindowMs: 900_000,
 
     });
   });
@@ -140,6 +145,23 @@ describe('hook config', () => {
     expect(resolveHookConfig({ judgeTimeoutMs: 999 }).judgeTimeoutMs).toBe(999);
     // the new name wins when both are present
     expect(resolveHookConfig({ judgeTimeoutMs: 999, jevTimeoutMs: 123_456 }).judgeTimeoutMs).toBe(999);
+  });
+
+  it('limits repeated calls of one tool and forgets them after the window', () => {
+    const state = new Map<string, number[]>();
+    // limit 3: three calls pass, the fourth denies with guidance
+    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 1_000, 3, 900_000)).toBeNull();
+    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 2_000, 3, 900_000)).toBeNull();
+    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 3_000, 3, 900_000)).toBeNull();
+    const deny = checkToolCall(state, 'mcp__aprimo__dam_browser', 4_000, 3, 900_000);
+    expect(deny).toMatch(/dam_browser called 4x/);
+    expect(deny).toMatch(/toolCallLimit=3/);
+    // a different tool is unaffected
+    expect(checkToolCall(state, 'Read', 4_000, 3, 900_000)).toBeNull();
+    // outside the window the old calls are forgotten
+    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 4_000 + 900_001, 3, 900_000)).toBeNull();
+    // limit 0 disables the limiter entirely
+    expect(checkToolCall(new Map(), 'Bash', 1_000, 0, 900_000)).toBeNull();
   });
 
   it('lets explicit baseUrl, model and judgeTimeoutMs win over the ollama defaults', () => {
