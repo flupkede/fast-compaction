@@ -80,8 +80,8 @@ describe('compact training log', () => {
     // keys are msg_<i>, matching the messageQuestions join
     expect(Object.keys(record.messageAnswers ?? {}).sort()).toEqual(['msg_3']);
     expect(record.messageDecisions?.map((d) => [d.i, d.reason])).toEqual([
-      [0, 'user'],
       [3, 'kept'],
+      // user prose inside the slice: present in the record, never judged
       [4, 'user'],
     ]);
     expect(record.answers).toEqual({ t1: { keepCall: 0.9, keepResult: 0.9 } });

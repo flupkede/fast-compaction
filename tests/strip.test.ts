@@ -77,7 +77,7 @@ describe('stripping through the state pipeline', () => {
       ],
     },
     { role: 'user', text: '', toolUses: [], toolResults: [{ tool_use_id: 't1', text: 'ok'.repeat(500) }] },
-    { role: 'assistant', text: 'edited src/auth.ts', toolUses: [] },
+    { role: 'assistant', text: 'edited the Acme auth', toolUses: [] },
     { role: 'user', text: 'done', toolUses: [] },
     { role: 'assistant', text: 'bye', toolUses: [] },
     { role: 'user', text: 'thanks', toolUses: [] },
