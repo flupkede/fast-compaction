@@ -10,6 +10,7 @@ import {
   decideMessage,
   estimateTokens,
   fitState,
+  sliceRanges,
   JevClient,
   messageChunkSize,
   parseJevResponse,
@@ -556,6 +557,56 @@ describe('compact', () => {
       expect(text).not.toContain('chars omitted');
       expect(text).toContain('old note');
     }
+  });
+
+  it('partitions against the envelope: many small entries never collapse a slice', async () => {
+    // regression (review probe): the accumulator used the raw ceiling, so a
+    // slice that "fit" by entry sum still collapsed once fitState added the
+    // context + goal envelope on top
+    const seen: Seen[] = [];
+    const messages = [message('user', 'seed')];
+    for (let i = 0; i < 200; i += 1) {
+      messages.push(message('assistant', `small note ${i} with a few words`));
+    }
+    messages.push(message('user', 'latest'));
+    const output = await compact(messages, fakeJev(() => 0.9, seen), {
+      maxStateTokens: 2_000,
+      preserveRecentMessages: 1,
+    });
+    expect(output.stats.slices).toBeGreaterThan(1);
+    expect(output.stats.stateStage).toBe('full');
+    for (const ask of seen) {
+      expect(JSON.stringify((ask.state as { history?: unknown[] }).history ?? ask.state)).not.toContain(
+        'chars omitted',
+      );
+    }
+  });
+
+  it('extends a slice past a straddled result instead of stranding the call', () => {
+    const messages = [
+      message('user', 'seed'), // 0
+      call('t1', 'Read', { file_path: 'src/a.ts' }, 'x'), // 1
+      message('assistant', 'p '.repeat(1100)), // 2
+      message('assistant', 'q '.repeat(1100)), // 3
+      result('t1', 'r'), // 4
+      call('t2', 'Read', { file_path: 'src/b.ts' }, 'x'), // 5
+      message('assistant', 's '.repeat(1100)), // 6
+      result('t2', 'r2'), // 7
+      message('user', 'latest'), // 8
+    ];
+    const calls = [
+      { id: 't1', tool: 'Read', input: {}, callIndex: 1, resultIndex: 4, pinned: false },
+      { id: 't2', tool: 'Read', input: {}, callIndex: 5, resultIndex: 7, pinned: false },
+    ] as unknown as ToolCall[];
+    const ranges = sliceRanges(messages, calls, 2_000, 1, 8);
+    // the natural break falls between the t1 call and its result: the range
+    // extends past the result, and a later call never swallows the window
+    expect(ranges).toEqual([
+      { start: 1, end: 5 },
+      { start: 5, end: 8 },
+    ]);
+    const covered = ranges.reduce((n, r) => n + (r.end - r.start), 0);
+    expect(covered).toBe(8 - 1);
   });
 
   it('keeps everything unjudged when the time budget is already spent', async () => {

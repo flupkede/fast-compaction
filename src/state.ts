@@ -203,6 +203,32 @@ export function goalFromMessages(messages: readonly Message[], strip?: Stripper)
     .join('\n');
 }
 
+/** Faithful entry cost shared by the state fitter and the slice partitioner. */
+export function historyEntryTokens(entry: HistoryEntry): number {
+  return estimateTokens(JSON.stringify(entry)) + 1;
+}
+
+/** Tokens the state envelope (context + goal) always costs, whatever the history. */
+export function stateEnvelopeTokens(goal: string): number {
+  return estimateTokens(JSON.stringify({ context: STATE_CONTEXT, goal, history: [] }));
+}
+
+/** Collapse stages of `fitState`, ordered from mildest to most severe. */
+export const STAGE_ORDER = [
+  'full',
+  'inputs<=200',
+  'inputs<=60',
+  'texts abridged',
+  'old messages collapsed',
+  'old calls compacted',
+  'old calls merged',
+];
+
+/** The more severe of two stage names ('' and unknown rank mildest). */
+export function worseStage(a: string, b: string): string {
+  return STAGE_ORDER.indexOf(b) > STAGE_ORDER.indexOf(a) ? b : a;
+}
+
 /**
  * Builds the Jev state from the whole conversation and shrinks it in stages
  * until it fits `maxStateTokens`: tool inputs are truncated, then long texts
@@ -225,7 +251,7 @@ export function fitState(
     goal,
     history,
   });
-  const entryTokens = (entry: HistoryEntry): number => estimateTokens(JSON.stringify(entry)) + 1;
+  const entryTokens = historyEntryTokens;
   const baseTokens = estimateTokens(JSON.stringify(stateOf([])));
   const fitted = (history: HistoryEntry[], tokens: number, stage: string): FittedState => ({
     state: stateOf(history),
@@ -358,7 +384,7 @@ export function sliceRanges(
     INPUT_CHARS[0],
     strip,
   );
-  const entrySize = (entry: HistoryEntry): number => estimateTokens(JSON.stringify(entry)) + 1;
+  const entrySize = historyEntryTokens;
 
   const ranges: Array<{ start: number; end: number }> = [];
   let first = 0;

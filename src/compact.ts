@@ -1,6 +1,15 @@
 import { noulAnswer } from './request.js';
 import { createStripper } from './strip.js';
-import { collectToolCalls, estimateTokens, fitState, goalFromMessages, isPinned, sliceRanges } from './state.js';
+import {
+  collectToolCalls,
+  estimateTokens,
+  fitState,
+  goalFromMessages,
+  isPinned,
+  sliceRanges,
+  stateEnvelopeTokens,
+  worseStage,
+} from './state.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -568,6 +577,10 @@ export async function compact(
   let partial = false;
   let batchErrors = 0;
   let sliceCount = 0;
+  // run-wide aggregates: the largest state sent and the worst collapse stage
+  // any slice needed (single-slice runs report that slice, as before)
+  let runStateTokens = 0;
+  let runStage = '';
   const answers = new Map<string, CallAnswer>();
   const messageAnswers = new Map<number, number>();
   const allProse: HistoryEntry[] = [];
@@ -598,7 +611,10 @@ export async function compact(
   const ranges = sliceRanges(
     messages,
     calls,
-    chunkOptions.maxStateTokens,
+    // the per-slice budget must subtract the envelope (context + goal) the
+    // fitter always adds on top, or slices that "fit" by entry sum still
+    // collapse inside fitState
+    Math.max(500, chunkOptions.maxStateTokens - stateEnvelopeTokens(goal)),
     sliceStart,
     sliceEnd,
     resolved.strip,
@@ -621,6 +637,8 @@ export async function compact(
       i: entry.i + range.start,
     }));
     fitted = fitted ?? state;
+    runStateTokens = Math.max(runStateTokens, state.tokens);
+    runStage = worseStage(runStage, state.stage);
     const sliceCandidates = chunkCalls.filter((call) => !call.pinned);
     const sliceBatches = batchCalls(sliceCandidates, state.tokens, resolved);
     const answeredCall = await pooled(
@@ -726,8 +744,8 @@ export async function compact(
       ts: new Date().toISOString(),
       source: resolved.trainingSource,
       state: (fitted ?? EMPTY_FITTED).state,
-      stateTokens: (fitted ?? EMPTY_FITTED).tokens,
-      stateStage: (fitted ?? EMPTY_FITTED).stage,
+      stateTokens: runStateTokens,
+      stateStage: runStage,
       questions,
       answers: Object.fromEntries(answers),
       decisions,
@@ -765,8 +783,8 @@ export async function compact(
       /** Prose entries judged droppable and removed. */
       messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
       budgetEvictions,
-      stateTokens: (fitted ?? EMPTY_FITTED).tokens,
-      stateStage: (fitted ?? EMPTY_FITTED).stage,
+      stateTokens: runStateTokens,
+      stateStage: runStage,
       // actually asked, not planned: a time budget can skip planned batches
       requests: callJudge.length,
       ms: Date.now() - started,

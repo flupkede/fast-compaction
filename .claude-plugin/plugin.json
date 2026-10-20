@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
