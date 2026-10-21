@@ -10,6 +10,7 @@ import {
   nextFloorPercent,
   register,
   resolveHookConfig,
+  shouldAutoCompact,
   STATS_COMMAND,
   summarize,
   toSessionMessages,
@@ -71,6 +72,7 @@ describe('hook config', () => {
       judgeTimeoutMs: 8000,
       toolCallLimit: 30,
       toolCallWindowMs: 900_000,
+      compactRegainPercent: 20,
     });
     expect(
       resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
@@ -88,6 +90,7 @@ describe('hook config', () => {
       judgeTimeoutMs: 8000,
       toolCallLimit: 30,
       toolCallWindowMs: 900_000,
+      compactRegainPercent: 20,
     });
   });
 
@@ -104,6 +107,7 @@ describe('hook config', () => {
       judgeTimeoutMs: 600000,
       toolCallLimit: 30,
       toolCallWindowMs: 900_000,
+      compactRegainPercent: 20,
 
     });
   });
@@ -162,6 +166,60 @@ describe('hook config', () => {
     expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 4_000 + 900_001, 3, 900_000)).toBeNull();
     // limit 0 disables the limiter entirely
     expect(checkToolCall(new Map(), 'Bash', 1_000, 0, 900_000)).toBeNull();
+  });
+
+  it('holds the auto trigger while the context has not regrown past its post-compaction low', () => {
+    const base = {
+      trigger: 'auto' as const,
+      tokens: 168_000,
+      minTokensSinceCompact: 136_000,
+      effective: 200_000,
+      regainPercent: 20,
+    };
+    // 32k growth < 20% of the window: held (the treadmill case)
+    expect(shouldAutoCompact({ ...base, now: 1_000_000, lastCompactAt: 900_000 })).toBe(false);
+    expect(shouldAutoCompact({ ...base, now: 1_000_000, lastCompactAt: 500_000 })).toBe(false);
+    // growth >= regain: fires
+    expect(
+      shouldAutoCompact({ ...base, tokens: 180_000, now: 1_000_000, lastCompactAt: 500_000 }),
+    ).toBe(true);
+    // first cycle without a compaction yet: fires
+    expect(
+      shouldAutoCompact({
+        trigger: 'auto',
+        tokens: 130_000,
+        effective: 200_000,
+        regainPercent: 20,
+        now: 1_000_000,
+      }),
+    ).toBe(true);
+    // within the cooldown right after a compaction: held even without a sampled low
+    expect(
+      shouldAutoCompact({
+        trigger: 'auto',
+        tokens: 140_000,
+        effective: 200_000,
+        regainPercent: 20,
+        now: 1_000_000,
+        lastCompactAt: 990_000,
+      }),
+    ).toBe(false);
+    // /compress force bypasses the guard entirely
+    expect(shouldAutoCompact({ ...base, trigger: 'force', now: 1_000_000, lastCompactAt: 999_000 })).toBe(true);
+    // regainPercent 0 disables the guard
+    expect(
+      shouldAutoCompact({ ...base, regainPercent: 0, now: 1_000_000, lastCompactAt: 500_000 }),
+    ).toBe(true);
+    // no context reading: legacy behaviour (fires)
+    expect(
+      shouldAutoCompact({
+        trigger: 'auto',
+        effective: 200_000,
+        regainPercent: 20,
+        now: 1_000_000,
+        lastCompactAt: 500_000,
+      }),
+    ).toBe(true);
   });
 
   it('lets explicit baseUrl, model and judgeTimeoutMs win over the ollama defaults', () => {
@@ -333,6 +391,7 @@ describe('slash commands', () => {
     const logs: string[] = [];
     const $ = {
       session: {
+        id: async () => 'rearm-test',
         usage: async () => ({ context: { tokens: 1000, percent } }),
         compact: async () => {
           if (reject) throw new Error('a turn is running');

@@ -49,6 +49,10 @@ const HOOK_DEFAULTS = {
   // context (observed: 137 dam_browser calls, 746k chars, autocompact thrashing)
   toolCallLimit: 30,
   toolCallWindowMs: 900_000,
+  // anti-treadmill: system prompt + tool schemas ride along with every
+  // request (invisible to the plugin), so the percent trigger alone re-fires
+  // every turn after a compaction (observed: three in 66 s, host thrash error)
+  compactRegainPercent: 20,
   // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   ollamaModel: 'clef-flash',
@@ -85,6 +89,9 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
    * further calls of that tool with guidance; 0 disables the limiter. */
   toolCallLimit: number;
   toolCallWindowMs: number;
+  /** Auto-compact only after the context regrew this % of the window above
+   * its post-compaction low; 0 disables the guard. */
+  compactRegainPercent: number;
   /**
    * Full System One endpoint to post to; when set, the request goes there
    * instead of the TypeSafe API and no API key is needed (e.g. a local
@@ -166,6 +173,11 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.judgeTimeoutMs),
     toolCallLimit: optionNumber(options, 'toolCallLimit', HOOK_DEFAULTS.toolCallLimit),
     toolCallWindowMs: optionNumber(options, 'toolCallWindowMs', HOOK_DEFAULTS.toolCallWindowMs),
+    compactRegainPercent: optionNumber(
+      options,
+      'compactRegainPercent',
+      HOOK_DEFAULTS.compactRegainPercent,
+    ),
   };
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
@@ -438,6 +450,16 @@ async function currentFloorPercent($: StatsHost, config: HookConfig): Promise<nu
   return stats.floorPercent ?? config.targetFloorStartPercent;
 }
 
+/** Read-only stats for the guard; never writes the store. */
+async function readStats($: StatsHost): Promise<SessionStats | undefined> {
+  try {
+    const [id, now] = await Promise.all([$.session.id(), $.clock.now()]);
+    return reviveSession(id, await $.store.get(STORE_PREFIX + id), now);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function evictOldStats($: StatsHostStore, now: number): Promise<number> {
   const stale = evictable(await loadAllStats($, now));
   for (const key of stale) await $.store.delete(key);
@@ -574,6 +596,40 @@ function withStats($: StatsHost, update: (stats: SessionStats, now: number) => v
 
 function logCompaction($: StatsHost, record: Omit<CompactionRecord, 'at'>): void {
   withStats($, (stats, at) => void recordCompaction(stats, { ...record, at }));
+}
+
+/** Hard brake right after a compaction, before any post-compaction low is sampled. */
+const POST_COMPACT_COOLDOWN_MS = 30_000;
+
+/**
+ * Anti-treadmill guard for the auto path: the context floor after a compaction
+ * (system prompt + tool schemas ride along with every request, invisible to
+ * the plugin) can sit below the percent trigger, so the threshold alone
+ * re-fires every turn (observed: three compactions in 66 s, host thrash
+ * error). Auto-compact only once the context has regrown `regainPercent` of
+ * the window above its post-compaction low; `force` (/compress) bypasses.
+ */
+export function shouldAutoCompact(input: {
+  trigger: 'auto' | 'force';
+  tokens?: number;
+  minTokensSinceCompact?: number;
+  lastCompactAt?: number;
+  now: number;
+  effective?: number;
+  regainPercent: number;
+}): boolean {
+  if (input.trigger === 'force') return true;
+  if (
+    input.lastCompactAt !== undefined &&
+    input.now - input.lastCompactAt < POST_COMPACT_COOLDOWN_MS
+  ) {
+    return false;
+  }
+  if (input.tokens === undefined) return true; // nothing measurable: legacy behaviour
+  if (input.minTokensSinceCompact === undefined) return true; // first cycle
+  const regain = (input.regainPercent / 100) * (input.effective ?? 0);
+  if (regain <= 0) return true; // 0 disables the guard
+  return input.tokens - input.minTokensSinceCompact >= regain;
 }
 
 /**
@@ -792,6 +848,12 @@ export const register: Register = (on: On, options: PluginOptions) => {
         recordTurn(stats, { ...sample, at });
         stats.lastPercent = context.percent;
         stats.lastTokens = context.tokens;
+        if (context.tokens !== undefined) {
+          stats.minTokensSinceCompact =
+            stats.minTokensSinceCompact === undefined
+              ? context.tokens
+              : Math.min(stats.minTokensSinceCompact, context.tokens);
+        }
       });
     } catch (error) {
       if (!trigger) {
@@ -799,15 +861,34 @@ export const register: Register = (on: On, options: PluginOptions) => {
         return answer;
       }
     }
+    let effective: number | undefined;
     if (!trigger) {
-      const effective = await effectiveWindow($, context);
+      effective = await effectiveWindow($, context);
       const overThreshold =
         typeof context.tokens === 'number' && effective !== undefined
           ? context.tokens >= (configured.compactAtPercent / 100) * effective
           : (context.percent ?? 0) >= configured.compactAtPercent;
       if (!overThreshold) return answer;
     }
-    if (!trigger) trigger = 'auto';
+    if (!trigger) {
+      const stats = await readStats($);
+      const verdict = shouldAutoCompact({
+        trigger: 'auto',
+        tokens: context.tokens,
+        minTokensSinceCompact: stats?.minTokensSinceCompact,
+        lastCompactAt: stats?.lastCompactAt,
+        now: Date.now(),
+        effective,
+        regainPercent: configured.compactRegainPercent,
+      });
+      if (!verdict) {
+        withStats($, (s) => {
+          s.lastAttempt = 'held: context has not regrown past its post-compaction low';
+        });
+        return answer;
+      }
+      trigger = 'auto';
+    }
     withStats($, (stats) => {
       stats.lastAttempt = `attempted (${trigger})`;
     });

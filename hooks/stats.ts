@@ -67,6 +67,11 @@ export type SessionStats = {
   lastPercent?: number;
   lastTokens?: number;
   lastAttempt?: string;
+  /** Anti-treadmill guard: ms epoch of the last compaction attempt, and the
+   * lowest context reading since it (host units — system prompt + tool
+   * schemas included, which the plugin never sees in its own accounting). */
+  lastCompactAt?: number;
+  minTokensSinceCompact?: number;
 };
 
 export const STORE_PREFIX = 'session:';
@@ -211,6 +216,10 @@ export function recordTurn(stats: SessionStats, turn: TurnSample): SessionStats 
 
 export function recordCompaction(stats: SessionStats, record: CompactionRecord): SessionStats {
   stats.lastAt = record.at;
+  // any attempt (whatever the outcome) stamps the cooldown brake and opens a
+  // new low-water cycle: the context it leaves behind is the new floor
+  stats.lastCompactAt = record.at;
+  stats.minTokensSinceCompact = undefined;
   stats.compactions[record.outcome] += 1;
   if (record.outcome === 'judge') {
     stats.judgeMs += record.ms ?? 0;

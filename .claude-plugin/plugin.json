@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -105,6 +105,12 @@
       "title": "Tool call limit window (ms)",
       "description": "Sliding window for the repeated tool call limit; old calls are forgotten after this.",
       "default": 900000
+    },
+    "compactRegainPercent": {
+      "type": "number",
+      "title": "Compaction regain percent",
+      "description": "Auto-compact only after the context regrew this % of the window above its post-compaction low. The fixed per-request overhead (system prompt + tool schemas) can sit below the trigger percentage; without this guard compaction would re-fire every turn. 0 disables.",
+      "default": 20
     },
     "truncateHeadChars": {
       "type": "number",
