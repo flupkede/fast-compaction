@@ -8,6 +8,7 @@ import {
   compactMessages,
   decideCall,
   decideMessage,
+  duplicateCallIds,
   estimateTokens,
   fitState,
   sliceRanges,
@@ -85,6 +86,7 @@ describe('options', () => {
       maxRequestTokens: 26_000,
       maxQuestionsPerRequest: 12,
       askConcurrency: 2,
+      duplicateKeepLast: 2,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -106,6 +108,82 @@ describe('options', () => {
       maxQuestionsPerRequest: 1,
     });
     expect(resolveOptions({ askConcurrency: 0 })).toMatchObject({ askConcurrency: 1 });
+    expect(resolveOptions({ duplicateKeepLast: -3 })).toMatchObject({ duplicateKeepLast: 0 });
+  });
+});
+
+describe('duplicateCallIds', () => {
+  const mk = (
+    id: string,
+    input: Record<string, unknown>,
+    pinned = false,
+  ): ToolCall => ({
+    id,
+    tool_use_id: `u_${id}`,
+    tool: 'Grep',
+    input,
+    callIndex: 0,
+    resultIndex: 1,
+    resultChars: 10,
+    isError: false,
+    pinned,
+  });
+
+  it('marks older identical repeats and keeps the newest N', () => {
+    const calls = [
+      mk('a', { pattern: 'x' }),
+      mk('b', { pattern: 'y' }),
+      mk('c', { pattern: 'x' }),
+      mk('d', { pattern: 'x' }),
+    ];
+    // three identical `x` calls: keep d and c, drop a; b is a distinct call
+    expect(duplicateCallIds(calls, 2)).toEqual(new Set(['a']));
+  });
+
+  it('counts pinned occurrences but never marks them', () => {
+    const calls = [mk('a', { pattern: 'x' }), mk('b', { pattern: 'x' }), mk('c', { pattern: 'x' }, true)];
+    // keep the newest one (c, pinned): both older repeats drop
+    expect(duplicateCallIds(calls, 1)).toEqual(new Set(['a', 'b']));
+  });
+
+  it('normalises input key order', () => {
+    const calls = [mk('a', { pattern: 'x', limit: 5 }), mk('b', { limit: 5, pattern: 'x' })];
+    expect(duplicateCallIds(calls, 1)).toEqual(new Set(['a']));
+  });
+
+  it('0 disables', () => {
+    expect(duplicateCallIds([mk('a', { p: 1 }), mk('b', { p: 1 })], 0)).toEqual(new Set());
+  });
+});
+
+describe('duplicate clustering in compact', () => {
+  it('drops older identical calls without asking the judge', async () => {
+    const transcript: Message[] = [
+      message('user', 'run the check three times'),
+      call('c1', 'Bash', { command: 'npm test' }, 'FAIL 1'),
+      result('c1', 'FAIL 1'),
+      call('c2', 'Bash', { command: 'npm test' }, 'FAIL 2'),
+      result('c2', 'FAIL 2'),
+      call('c3', 'Bash', { command: 'npm test' }, 'PASS'),
+      result('c3', 'PASS'),
+    ];
+    const seen: Seen[] = [];
+    const res = await compact(transcript, fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 0,
+    });
+    const asked = seen.flatMap((s) => s.questions);
+    expect(asked).toContain('call_t2');
+    expect(asked).toContain('call_t3');
+    expect(asked).not.toContain('call_t1');
+    expect(res.decisions.find((d) => d.id === 't1')).toMatchObject({
+      action: 'drop_call',
+      reason: 'duplicate',
+    });
+    expect(res.decisions.find((d) => d.id === 't3')).toMatchObject({ action: 'keep' });
+    expect(res.stats.duplicates).toBe(1);
+    expect(res.messages.some((m) => m.toolUses.some((t) => t.tool_use_id === 'c1'))).toBe(false);
+    expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c1'))).toBe(false);
+    expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c3'))).toBe(true);
   });
 });
 

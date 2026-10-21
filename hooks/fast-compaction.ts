@@ -56,6 +56,9 @@ const HOOK_DEFAULTS = {
   // request (invisible to the plugin), so the percent trigger alone re-fires
   // every turn after a compaction (observed: three in 66 s, host thrash error)
   compactRegainPercent: 20,
+  // identical repeats are judged mechanically, not by the model (observed:
+  // 137 identical dam_browser calls drowning one session)
+  duplicateKeepLast: 2,
   // Local inference is slow: the timeout matches the replay CLI's 10 minutes.
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   ollamaModel: 'clef-flash',
@@ -132,6 +135,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxRequestTokens',
     'maxQuestionsPerRequest',
     'askConcurrency',
+    'duplicateKeepLast',
     'timeBudgetMs',
     'truncateHeadChars',
   ] as const) {
@@ -542,6 +546,7 @@ const KNOBS = [
   'maxRequestTokens',
   'maxQuestionsPerRequest',
   'askConcurrency',
+  'duplicateKeepLast',
   'compactAtPercent',
   'minReductionRatio',
   'judgeTimeoutMs',

@@ -40,6 +40,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxRequestTokens: 26_000,
   maxQuestionsPerRequest: 12,
   askConcurrency: 2,
+  duplicateKeepLast: 2,
   truncateHeadChars: 300,
   trainingSource: 'live',
 };
@@ -80,6 +81,10 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     askConcurrency: Math.max(
       1,
       Math.floor(finite(options.askConcurrency, DEFAULT_OPTIONS.askConcurrency)),
+    ),
+    duplicateKeepLast: Math.max(
+      0,
+      Math.floor(finite(options.duplicateKeepLast, DEFAULT_OPTIONS.duplicateKeepLast)),
     ),
     timeBudgetMs:
       typeof options.timeBudgetMs === 'number' && Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs >= 0
@@ -173,6 +178,55 @@ const EMPTY_FITTED: FittedState = {
   tokens: 0,
   stage: '',
 };
+
+/** Stable JSON for a tool input: object keys sorted recursively, so two
+ * structurally identical inputs produce the same string. */
+function stableInput(input: Record<string, unknown>): string {
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+        out[key] = stable((value as Record<string, unknown>)[key]);
+      }
+      return out;
+    }
+    return value;
+  };
+  try {
+    return JSON.stringify(stable(input));
+  } catch {
+    return String(input);
+  }
+}
+
+/**
+ * Ids of calls that repeat an earlier identical call (same tool, same
+ * normalised input): only the newest `duplicateKeepLast` occurrences of each
+ * distinct call survive, everything older is mechanically droppable — a
+ * repeat adds nothing its kept newest results do not already hold (the flood
+ * class: hundreds of identical paginated browser/search calls). Pinned calls
+ * are never marked, but they do count as occurrences, so the kept-newest
+ * window stays honest. 0 disables.
+ */
+export function duplicateCallIds(calls: readonly ToolCall[], keepLast: number): Set<string> {
+  const duplicates = new Set<string>();
+  if (keepLast <= 0) return duplicates;
+  const keyOf = (call: ToolCall): string => `${call.tool}\u0000${stableInput(call.input)}`;
+  const totals = new Map<string, number>();
+  for (const call of calls) {
+    const key = keyOf(call);
+    totals.set(key, (totals.get(key) ?? 0) + 1);
+  }
+  const nth = new Map<string, number>();
+  for (const call of calls) {
+    const key = keyOf(call);
+    const n = (nth.get(key) ?? 0) + 1;
+    nth.set(key, n);
+    if (!call.pinned && n <= (totals.get(key) ?? 0) - keepLast) duplicates.add(call.id);
+  }
+  return duplicates;
+}
 
 /** Question-token cost of one `msg_<i>` question (constant instructions). */
 const MESSAGE_QUESTION_TOKENS = 64;
@@ -569,6 +623,8 @@ export async function compact(
     resolved.preserveStartMessages,
   );
   const candidates = calls.filter((call) => !call.pinned);
+  // mechanical pre-filter: identical repeats never reach the judge
+  const duplicates = duplicateCallIds(calls, resolved.duplicateKeepLast);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: FittedState | undefined;
@@ -639,7 +695,9 @@ export async function compact(
     fitted = fitted ?? state;
     runStateTokens = Math.max(runStateTokens, state.tokens);
     runStage = worseStage(runStage, state.stage);
-    const sliceCandidates = chunkCalls.filter((call) => !call.pinned);
+    const sliceCandidates = chunkCalls.filter(
+      (call) => !call.pinned && !duplicates.has(call.id),
+    );
     const sliceBatches = batchCalls(sliceCandidates, state.tokens, resolved);
     const answeredCall = await pooled(
       sliceBatches,
@@ -704,6 +762,20 @@ export async function compact(
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
+  // duplicates were never asked: record the mechanical verdict (synthetic
+  // 0.0 answers, like pinned carries synthetic 1.0); decisions is parallel
+  // to calls (built with calls.map)
+  for (const [index, call] of calls.entries()) {
+    if (!duplicates.has(call.id)) continue;
+    decisions[index] = {
+      id: call.id,
+      tool: call.tool,
+      keepCall: 0,
+      keepResult: 0,
+      action: 'drop_call',
+      reason: 'duplicate',
+    };
+  }
   const messageDecisions = proseEntries.map((entry) =>
     decideMessage(
       entry,
@@ -782,6 +854,7 @@ export async function compact(
       pinned: count(decisions, 'pinned'),
       /** Prose entries judged droppable and removed. */
       messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
+      duplicates: duplicates.size,
       budgetEvictions,
       stateTokens: runStateTokens,
       stateStage: runStage,

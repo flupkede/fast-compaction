@@ -62,7 +62,7 @@ export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped' | 'budget';
+  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped' | 'budget' | 'duplicate';
 }
 
 export interface HistoryToolCall {
@@ -126,6 +126,14 @@ export interface CompactOptions {
   /** Judge requests in flight at once; 2 matches ollama's parallel slots. Default 2. */
   askConcurrency?: number;
   /**
+   * Older repeats of an identical call (same tool, same input) are dropped
+   * without asking the judge — only the newest `duplicateKeepLast` of each
+   * distinct call survive. A repeat adds nothing its kept newest results do
+   * not already hold; this is the flood class (hundreds of identical
+   * paginated browser/search calls). 0 disables. Default 2.
+   */
+  duplicateKeepLast?: number;
+  /**
    * Stop asking the judge once this many milliseconds have passed: unanswered
    * candidates stay (conservative) and `stats.partial` marks the result, so a
    * huge first compaction finishes inside the host's hook budget and the
@@ -170,6 +178,7 @@ export interface ResolvedCompactOptions {
   maxRequestTokens: number;
   maxQuestionsPerRequest: number;
   askConcurrency: number;
+  duplicateKeepLast: number;
   timeBudgetMs?: number;
   tolerateRequestFailures?: boolean;
   truncateHeadChars: number;
@@ -195,6 +204,8 @@ export interface CompactResult {
     pinned: number;
     /** Prose entries judged droppable and removed. */
     messagesDropped: number;
+    /** Older identical repeats dropped without judging; 0 when off. */
+    duplicates: number;
     /** Entries demoted by the token budget (calls + prose); 0 without `targetTokens`. */
     budgetEvictions: number;
     stateTokens: number;

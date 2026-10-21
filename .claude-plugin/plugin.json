@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.7.9",
+  "version": "0.8.0",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -86,6 +86,12 @@
       "type": "number",
       "title": "Judge request concurrency",
       "description": "Judge requests in flight at once; 2 matches Ollama's default parallel slots.",
+      "default": 2
+    },
+    "duplicateKeepLast": {
+      "type": "number",
+      "title": "Identical call repeats kept",
+      "description": "Older repeats of an identical tool call (same tool, same input) are dropped without asking the judge; only the newest N of each distinct call survive. 0 disables.",
       "default": 2
     },
     "timeBudgetMs": {
