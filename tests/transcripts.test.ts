@@ -836,6 +836,8 @@ describe('segmentByFit', () => {
     preserveStartMessages: 2,
     maxStateTokens: 30000,
     maxRequestTokens: 35000,
+    maxQuestionsPerRequest: 12,
+    askConcurrency: 2,
     truncateHeadChars: 300,
     trainingSource: 'replay' as const,
   };

@@ -178,7 +178,7 @@ describe('createShimServer', () => {
         server.close();
       }
     }
-    expect(JSON.parse(bodies[0]).keep_alive).toBeUndefined();
-    expect(JSON.parse(bodies[1]).keep_alive).toBe('1h');
+    expect(JSON.parse(bodies[0]!).keep_alive).toBeUndefined();
+    expect(JSON.parse(bodies[1]!).keep_alive).toBe('1h');
   });
 });

@@ -17,8 +17,7 @@ import {
   withDeadline,
 } from '../hooks/fast-compaction.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
-
-type SessionMessage = Message & { handle?: string };
+import type { SessionMessage } from 'claude-code';
 
 function message(role: Message['role'], text: string, extra: Partial<SessionMessage> = {}): SessionMessage {
   return { role, text, toolUses: [], ...extra };

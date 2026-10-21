@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.scripts.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "baseUrl": "..",
+    "paths": {
+      "claude-code": ["types/claude-code.d.ts"]
+    }
+  },
+  "include": ["."]
+}
