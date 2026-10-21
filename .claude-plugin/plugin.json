@@ -94,6 +94,12 @@
       "description": "Older repeats of an identical tool call (same tool, same input) are dropped without asking the judge; only the newest N of each distinct call survive. 0 disables.",
       "default": 2
     },
+    "sliceMap": {
+      "type": "boolean",
+      "title": "Slice map",
+      "description": "Include cross-slice context in every judge state: slice position, window-wide tool histogram and the user-prompt thread. Enable after retraining the judge on map-shaped data.",
+      "default": false
+    },
     "timeBudgetMs": {
       "type": "number",
       "title": "Compaction time budget (ms)",

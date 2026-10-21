@@ -27,6 +27,7 @@ import type {
   ToolCall,
   ToolUse,
   TrainingRecord,
+  WindowMap,
 } from './types.js';
 
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
@@ -41,6 +42,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxQuestionsPerRequest: 12,
   askConcurrency: 2,
   duplicateKeepLast: 2,
+  sliceMap: false,
   truncateHeadChars: 300,
   trainingSource: 'live',
 };
@@ -86,6 +88,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.duplicateKeepLast, DEFAULT_OPTIONS.duplicateKeepLast)),
     ),
+    sliceMap: options.sliceMap === true,
     timeBudgetMs:
       typeof options.timeBudgetMs === 'number' && Number.isFinite(options.timeBudgetMs) && options.timeBudgetMs >= 0
         ? options.timeBudgetMs
@@ -664,19 +667,54 @@ export async function compact(
     preserveRecentMessages: 0,
     preserveStartMessages: 0,
   };
+  // slice map: positional + relational context in every judge state (off by
+  // default — the live student judge is trained on map-less states)
+  const MAP_PROMPT_HEAD_CHARS = 120;
+  const MAP_MAX_PROMPTS = 6;
+  let windowMapBase: WindowMap | undefined;
+  if (resolved.sliceMap) {
+    const toolCounts: Record<string, number> = {};
+    for (const call of candidates) {
+      if (duplicates.has(call.id)) continue;
+      toolCounts[call.tool] = (toolCounts[call.tool] ?? 0) + 1;
+    }
+    const heads: string[] = [];
+    for (const m of messages) {
+      if (m.role !== 'user' || !m.text.trim()) continue;
+      const head = m.text.trim().slice(0, MAP_PROMPT_HEAD_CHARS);
+      if (heads[heads.length - 1] !== head) heads.push(head);
+    }
+    const userPrompts =
+      heads.length <= MAP_MAX_PROMPTS
+        ? heads
+        : [
+            ...heads.slice(0, Math.ceil(MAP_MAX_PROMPTS / 2)),
+            ...heads.slice(-Math.floor(MAP_MAX_PROMPTS / 2)),
+          ];
+    windowMapBase = {
+      // slices is patched once the ranges are known; the representative slice
+      // field uses maximal digit width so the measured envelope can only
+      // overestimate (partitioning on the safe side), never undercut
+      window: { messages: messages.length, slices: 1 },
+      slice: { index: 9, from: sliceEnd, to: sliceEnd },
+      tools: toolCounts,
+      userPrompts,
+    };
+  }
   const ranges = sliceRanges(
     messages,
     calls,
-    // the per-slice budget must subtract the envelope (context + goal) the
-    // fitter always adds on top, or slices that "fit" by entry sum still
+    // the per-slice budget must subtract the envelope (context + goal + map)
+    // the fitter always adds on top, or slices that "fit" by entry sum still
     // collapse inside fitState
-    Math.max(500, chunkOptions.maxStateTokens - stateEnvelopeTokens(goal)),
+    Math.max(500, chunkOptions.maxStateTokens - stateEnvelopeTokens(goal, windowMapBase)),
     sliceStart,
     sliceEnd,
     resolved.strip,
   );
   sliceCount = ranges.length;
-  for (const range of ranges) {
+  if (windowMapBase) windowMapBase.window.slices = sliceCount;
+  for (const [sliceIndex, range] of ranges.entries()) {
     if (outOfTime()) {
       partial = true;
       break;
@@ -686,7 +724,15 @@ export async function compact(
     const chunkCalls = calls.filter(
       (call) => call.callIndex >= range.start && call.callIndex < range.end && call.resultIndex < range.end,
     );
-    const state = fitState(chunkMessages, chunkCalls, chunkOptions);
+    const state = fitState(chunkMessages, chunkCalls, {
+      ...chunkOptions,
+      map: windowMapBase
+        ? {
+            ...windowMapBase,
+            slice: { index: sliceIndex + 1, from: range.start, to: range.end },
+          }
+        : undefined,
+    });
     // fitState indexes within the chunk; shift to global message indices
     state.state.history = state.state.history.map((entry) => ({
       ...entry,

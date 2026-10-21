@@ -142,6 +142,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
+  if (options.sliceMap === true) numbers.sliceMap = true;
   // Raw option values first, then the asker's defaults; explicit values win in both modes.
   const askerOption = optionString(options, 'asker');
   const asker = askerOption === 'ollama' ? 'ollama' : 'cloud';

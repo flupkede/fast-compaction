@@ -12,6 +12,7 @@ import {
   estimateTokens,
   fitState,
   sliceRanges,
+  stateEnvelopeTokens,
   worseStage,
   JevClient,
   messageChunkSize,
@@ -184,6 +185,52 @@ describe('duplicate clustering in compact', () => {
     expect(res.messages.some((m) => m.toolUses.some((t) => t.tool_use_id === 'c1'))).toBe(false);
     expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c1'))).toBe(false);
     expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c3'))).toBe(true);
+  });
+});
+
+describe('slice map', () => {
+  const map = {
+    window: { messages: 9, slices: 2 },
+    slice: { index: 1, from: 1, to: 5 },
+    tools: { Bash: 2 },
+    userPrompts: ['run the check three times'],
+  };
+
+  it('charges the map in the envelope', () => {
+    const bare = stateEnvelopeTokens('fix the test');
+    const withMap = stateEnvelopeTokens('fix the test', map);
+    expect(withMap).toBeGreaterThan(bare);
+  });
+
+  it('rides along in the fitted state', () => {
+    const fitted = fitState(transcript(), [], {
+      maxStateTokens: 25_000,
+      preserveRecentMessages: 0,
+      goal: 'fix the test',
+      map,
+    });
+    expect(fitted.state.map).toEqual(map);
+  });
+
+  it('reaches the judge when sliceMap is on and stays out when off', async () => {
+    const t: Message[] = [
+      message('user', 'run the check three times'),
+      call('c1', 'Bash', { command: 'npm test' }, 'FAIL 1'),
+      result('c1', 'FAIL 1'),
+      call('c2', 'Bash', { command: 'npm test' }, 'FAIL 2'),
+      result('c2', 'FAIL 2'),
+      message('assistant', 'done'),
+    ];
+    const seen: Seen[] = [];
+    await compact(t, fakeJev(() => 0.9, seen), { preserveRecentMessages: 0, sliceMap: true });
+    const state = seen[0]?.state as { map?: { window: { slices: number }; tools: Record<string, number>; userPrompts: string[] } };
+    expect(state.map).toBeDefined();
+    expect(state.map?.window.slices).toBe(1);
+    expect(state.map?.tools).toEqual({ Bash: 2 });
+    expect(state.map?.userPrompts).toEqual(['run the check three times']);
+    const plain: Seen[] = [];
+    await compact(t, fakeJev(() => 0.9, plain), { preserveRecentMessages: 0 });
+    expect((plain[0]?.state as { map?: unknown }).map).toBeUndefined();
   });
 });
 

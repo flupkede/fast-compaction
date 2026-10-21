@@ -8,6 +8,7 @@ import type {
   ResolvedCompactOptions,
   ToolCall,
   ToolResult,
+  WindowMap,
 } from './types.js';
 
 export const STATE_CONTEXT =
@@ -208,9 +209,10 @@ export function historyEntryTokens(entry: HistoryEntry): number {
   return estimateTokens(JSON.stringify(entry)) + 1;
 }
 
-/** Tokens the state envelope (context + goal) always costs, whatever the history. */
-export function stateEnvelopeTokens(goal: string): number {
-  return estimateTokens(JSON.stringify({ context: STATE_CONTEXT, goal, history: [] }));
+/** Tokens the state envelope (context + goal + optional map) always costs,
+ * whatever the history. */
+export function stateEnvelopeTokens(goal: string, map?: WindowMap): number {
+  return estimateTokens(JSON.stringify({ context: STATE_CONTEXT, goal, map, history: [] }));
 }
 
 /** Collapse stages of `fitState`, ordered from mildest to most severe. */
@@ -243,6 +245,7 @@ export function fitState(
   calls: readonly ToolCall[],
   options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal' | 'strip'> & {
     preserveStartMessages?: number;
+    map?: WindowMap;
   },
 ): FittedState {
   const strip = options.strip;
@@ -250,6 +253,7 @@ export function fitState(
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
     context: STATE_CONTEXT,
     goal,
+    ...(options.map ? { map: options.map } : {}),
     history,
   });
   const entryTokens = historyEntryTokens;

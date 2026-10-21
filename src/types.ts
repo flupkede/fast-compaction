@@ -80,11 +80,30 @@ export interface HistoryEntry {
   tool_calls?: HistoryToolCall[] | string[];
 }
 
+/**
+ * Cross-slice context sent with every judge request when `sliceMap` is on:
+ * where this slice sits in the window, what else the window holds, and the
+ * user-prompt thread spanning the slices — relational awareness a single
+ * slice cannot carry on its own.
+ */
+export interface WindowMap {
+  /** Window size and how it was partitioned. */
+  window: { messages: number; slices: number };
+  /** Where this slice sits (1-based, message range [from, to)). */
+  slice: { index: number; from: number; to: number };
+  /** Candidate-call counts per tool across the whole window (post-clustering). */
+  tools: Record<string, number>;
+  /** Heads of the user prompts across the window (the task thread). */
+  userPrompts: string[];
+}
+
 /** The state sent with every Jev request: the whole history, results omitted. */
 export interface CompactionState {
   context: string;
   goal: string;
   history: HistoryEntry[];
+  /** Present only when the `sliceMap` option is on. */
+  map?: WindowMap;
 }
 
 export interface FittedState {
@@ -134,6 +153,14 @@ export interface CompactOptions {
    */
   duplicateKeepLast?: number;
   /**
+   * Include a `WindowMap` in every judge state: slice position, window-wide
+   * tool histogram and the user-prompt thread. Cross-slice relational
+   * context for the judge. Off by default: the live student judge was
+   * trained on map-less states — enable after retraining on map-shaped
+   * training data (replay regenerates the dataset in the new shape).
+   */
+  sliceMap?: boolean;
+  /**
    * Stop asking the judge once this many milliseconds have passed: unanswered
    * candidates stay (conservative) and `stats.partial` marks the result, so a
    * huge first compaction finishes inside the host's hook budget and the
@@ -179,6 +206,7 @@ export interface ResolvedCompactOptions {
   maxQuestionsPerRequest: number;
   askConcurrency: number;
   duplicateKeepLast: number;
+  sliceMap: boolean;
   timeBudgetMs?: number;
   tolerateRequestFailures?: boolean;
   truncateHeadChars: number;
