@@ -598,6 +598,18 @@ describe('parseReplayArgs', () => {
     expect(parseReplayArgs(['--segment'])).toMatchObject({ segment: true });
   });
 
+  it('parses --slice-map and builds it into the compact options', async () => {
+    const { parseReplayArgs } = await import('../src/index.js');
+    expect(parseReplayArgs(['--slice-map'])).toMatchObject({ sliceMap: true });
+    const { buildCompactOptions } = await import('../scripts/replay-training.ts');
+    expect(buildCompactOptions({ sliceMap: true }, [])).toEqual({
+      maxStateTokens: 8000,
+      sliceMap: true,
+      strip: {},
+    });
+    expect(buildCompactOptions({}, [])).toEqual({ maxStateTokens: 8000, strip: {} });
+  });
+
   it('parses --max-state-tokens and validates the number', async () => {
     const { parseReplayArgs } = await import('../src/index.js');
     expect(parseReplayArgs(['--max-state-tokens', '2000'])).toMatchObject({ maxStateTokens: 2000 });
@@ -838,6 +850,8 @@ describe('segmentByFit', () => {
     maxRequestTokens: 35000,
     maxQuestionsPerRequest: 12,
     askConcurrency: 2,
+    duplicateKeepLast: 2,
+    sliceMap: false,
     truncateHeadChars: 300,
     trainingSource: 'replay' as const,
   };

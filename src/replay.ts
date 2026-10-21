@@ -171,6 +171,8 @@ export interface ReplayArgs {
   requestTimeoutMs?: number;
   /** Re-attempt sessions ledgered "too large" by splitting them at user prompts (default on; `--no-segment` disables). */
   segment?: boolean;
+  /** Include the WindowMap in every judge state (training data in the new shape). */
+  sliceMap?: boolean;
 }
 
 /** Parses replay CLI flags; throws on anything unknown or malformed. */
@@ -201,6 +203,7 @@ export function parseReplayArgs(argv: readonly string[]): ReplayArgs {
     else if (arg === '--delay-ms') args.delayMs = number(arg, argv[++i]);
     else if (arg === '--min-messages') args.minMessages = number(arg, argv[++i]);
     else if (arg === '--no-strip') args.noStrip = true;
+    else if (arg === '--slice-map') args.sliceMap = true;
     else if (arg === '--blocklist') args.blocklistPath = value(arg, argv[++i]);
     else if (arg === '--asker') {
       const kind = value(arg, argv[++i]);

@@ -71,6 +71,10 @@ Options:
   --no-segment            disable the default splitting of sessions ledgered
                           "history too large" into the fewest possible windows,
                           cut at user prompts, replayed as their own records
+  --slice-map             include the WindowMap (slice position, tool
+                          histogram, user-prompt thread) in every judge state —
+                          generates training data in the map shape for
+                          retraining
 
 Identifier stripping is ON by default: identifiers become stable tokens
 ([PATH_1], [URL_2], ...) after secret redaction, before anything is sent.
@@ -182,13 +186,14 @@ export const LOCAL_MAX_STATE_TOKENS = 8000;
 
 /** Builds compactOptions from the parsed flags: token ceiling + identifier stripping. */
 export function buildCompactOptions(
-  args: Pick<ReplayArgs, 'maxStateTokens' | 'noStrip' | 'blocklistPath' | 'asker'>,
+  args: Pick<ReplayArgs, 'maxStateTokens' | 'noStrip' | 'blocklistPath' | 'asker' | 'sliceMap'>,
   blocklist: string[],
 ): CompactOptions {
   let options: CompactOptions = {};
   if (args.maxStateTokens !== undefined) options = { ...options, maxStateTokens: args.maxStateTokens };
   // local is the default asker and its endpoint caps request size; cloud keeps the library default
   else if (args.asker !== 'cloud') options = { ...options, maxStateTokens: LOCAL_MAX_STATE_TOKENS };
+  if (args.sliceMap) options = { ...options, sliceMap: true };
   if (!args.noStrip) {
     options = { ...options, strip: blocklist.length > 0 ? { blocklist } : {} };
   }
