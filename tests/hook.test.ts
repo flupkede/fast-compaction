@@ -62,7 +62,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({
-      compactAtPercent: 60,
+      compactAtPercent: 95,
       minReductionRatio: 0.25,
       targetFloorStartPercent: 50,
       targetFloorMinPercent: 25,
@@ -81,7 +81,7 @@ describe('hook config', () => {
       maxStateTokens: 1000,
       model: 'jev-x',
       goal: 'g',
-      compactAtPercent: 60,
+      compactAtPercent: 95,
       minReductionRatio: 0.25,
       targetFloorStartPercent: 50,
       targetFloorMinPercent: 25,
@@ -96,7 +96,7 @@ describe('hook config', () => {
   it('applies ollama defaults when asker is ollama', () => {
     expect(resolveHookConfig({ asker: 'ollama' })).toEqual({
       asker: 'ollama',
-      compactAtPercent: 60,
+      compactAtPercent: 95,
       minReductionRatio: 0.25,
       targetFloorStartPercent: 50,
       targetFloorMinPercent: 25,
@@ -386,7 +386,7 @@ describe('slash commands', () => {
     const turn = registeredHooks().find((e) => e.pattern === 'turn.complete')!;
     let calls = 0;
     let reject = true;
-    let percent = 90;
+    let percent = 96;
     const logs: string[] = [];
     const $ = {
       session: {
@@ -419,7 +419,7 @@ describe('slash commands', () => {
     await turn.hook(
       {
         session: {
-          usage: async () => ({ context: { tokens: 150000, window: 1000000, percent: 15 } }),
+          usage: async () => ({ context: { tokens: 192000, window: 1000000, percent: 19.2 } }),
           compact: async () => {
             calls += 1;
             return { messages: [] };
@@ -433,8 +433,8 @@ describe('slash commands', () => {
       { agentId: undefined },
       (event: unknown) => event,
     );
-    // 150k of a 200k auto-compact window = 75% — the host compacts soon; the
-    // model-window percent (15% of 1M) must not keep the plugin idle.
+    // 192k of a 200k auto-compact window = 96% — the host compacts now; the
+    // model-window percent (19.2% of 1M) must not keep the plugin idle.
     expect(calls).toBe(1);
   });
 });

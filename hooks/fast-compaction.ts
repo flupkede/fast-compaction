@@ -38,7 +38,10 @@ export const STATS_COMMAND = 'compaction-stats';
 export const COMPRESS_COMMAND = 'compress';
 
 const HOOK_DEFAULTS = {
-  compactAtPercent: 60,
+  // compact only near the host's own auto-compact point (~95%): every
+  // compaction rewrites the prompt-cache suffix and costs a full turn of
+  // context — compacting earlier throws away cache for no gain.
+  compactAtPercent: 95,
   minReductionRatio: 0.25,
   targetFloorStartPercent: 50,
   targetFloorMinPercent: 25,

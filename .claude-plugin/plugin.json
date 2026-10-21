@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -37,8 +37,8 @@
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Context percentage at which turn.complete requests compaction.",
-      "default": 60
+      "description": "Context percentage at which turn.complete requests compaction. Keep it at the host's auto-compact point (~95): every compaction rewrites the prompt-cache suffix, so compacting earlier wastes cache for no gain.",
+      "default": 95
     },
     "minReductionRatio": {
       "type": "number",

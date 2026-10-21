@@ -52,7 +52,7 @@ The plugin declares these `userConfig` values in
 | `keepThreshold` | `0.5` |
 | `preserveRecentMessages` | `6` |
 | `preserveStartMessages` | `2` |
-| `compactAtPercent` | `60` |
+| `compactAtPercent` | `95` |
 | `minReductionRatio` | `0.25` |
 | `targetFloorStartPercent` | `50` |
 | `targetFloorMinPercent` | `25` |
