@@ -717,6 +717,48 @@ describe('compact', () => {
     }
   });
 
+  it('pipelines slices without exceeding askConcurrency in flight', async () => {
+    // each slice holds exactly one call batch and one message batch: with
+    // sequential slices the peak in flight would be 1 (single-request phases
+    // never overlap), with pipelined slices it reaches askConcurrency — and
+    // the shared gate must cap it there, or requests queue server-side and
+    // trip the host's 30s fetch abort
+    let inFlight = 0;
+    let peak = 0;
+    const seen: Seen[] = [];
+    const asker: JevAsker = {
+      async ask(state, questions: JevQuestions) {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        seen.push({ state, questions: Object.keys(questions) });
+        inFlight -= 1;
+        return {
+          answers: Object.fromEntries(
+            Object.keys(questions).map((key) => [key, { type: 'noul' as const, noul: 0.9 }]),
+          ),
+        };
+      },
+    };
+    const messages = [message('user', 'seed')];
+    for (let i = 0; i < 8; i += 1) {
+      messages.push(
+        message('assistant', `old note ${i} `.repeat(400)),
+        call(`tool-${i}`, 'Read', { file_path: `src/file${i}.ts` }, 'x'),
+        result(`tool-${i}`, 'short body'),
+      );
+    }
+    messages.push(message('user', 'latest'));
+    const output = await compact(messages, asker, {
+      maxStateTokens: 2_000,
+      preserveRecentMessages: 1,
+      askConcurrency: 2,
+    });
+    expect(output.stats.slices).toBeGreaterThan(1);
+    expect(peak).toBe(2);
+    expect(seen.length).toBeGreaterThan(1);
+  });
+
   it('extends a slice past a straddled result instead of stranding the call', () => {
     const messages = [
       message('user', 'seed'), // 0

@@ -324,6 +324,30 @@ async function pooled<T, R>(items: readonly T[], limit: number, fn: (item: T) =>
   return results;
 }
 
+/** Shared request gate: slices pipeline (neighbouring slices' phases overlap),
+ * but the judge never sees more than `limit` requests in flight — a request
+ * queued server-side behind ollama's parallel slots once hit the host's hard
+ * 30s fetch abort. Sequential slices left the GPU idle whenever a slice phase
+ * held a single request (the common case: one call batch + one message batch
+ * per slice). */
+class Semaphore {
+  private active = 0;
+  private readonly waiters: (() => void)[] = [];
+  constructor(private readonly limit: number) {}
+  async run<T>(task: () => Promise<T>): Promise<T> {
+    while (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    this.active += 1;
+    try {
+      return await task();
+    } finally {
+      this.active -= 1;
+      this.waiters.shift()?.();
+    }
+  }
+}
+
 async function askBatch(
   asker: JevAsker,
   state: CompactionState,
@@ -714,10 +738,14 @@ export async function compact(
   );
   sliceCount = ranges.length;
   if (windowMapBase) windowMapBase.window.slices = sliceCount;
-  for (const [sliceIndex, range] of ranges.entries()) {
+  const gate = new Semaphore(resolved.askConcurrency);
+  const processRange = async (
+    sliceIndex: number,
+    range: { start: number; end: number },
+  ): Promise<{ state?: FittedState; prose: HistoryEntry[]; messageCandidates: HistoryEntry[] }> => {
     if (outOfTime()) {
       partial = true;
-      break;
+      return { prose: [], messageCandidates: [] };
     }
     const chunkMessages = messages.slice(range.start, range.end);
     // calls whose result lands beyond the range stay unjudged (conservative)
@@ -738,9 +766,6 @@ export async function compact(
       ...entry,
       i: entry.i + range.start,
     }));
-    fitted = fitted ?? state;
-    runStateTokens = Math.max(runStateTokens, state.tokens);
-    runStage = worseStage(runStage, state.stage);
     const sliceCandidates = chunkCalls.filter(
       (call) => !call.pinned && !duplicates.has(call.id),
     );
@@ -754,12 +779,14 @@ export async function compact(
           return Promise.resolve(new Map<string, CallAnswer>());
         }
         // one dead batch must not kill the pass: its calls stay (conservative)
-        return askBatch(asker, state.state, batch, judgeTimings).catch((error: unknown) => {
-          if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
-          partial = true;
-          batchErrors += 1;
-          return new Map<string, CallAnswer>();
-        });
+        return gate
+          .run(() => askBatch(asker, state.state, batch, judgeTimings))
+          .catch((error: unknown) => {
+            if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
+            partial = true;
+            batchErrors += 1;
+            return new Map<string, CallAnswer>();
+          });
       },
     );
     for (const map of answeredCall) {
@@ -767,15 +794,13 @@ export async function compact(
     }
     // prose entries present in the fitted state, outside the protected window;
     // user prose carries the task instructions: never judged, never dropped
-    const proseEntries = state.state.history.filter((entry) => entry.text.trim().length > 0);
-    const messageCandidates = proseEntries.filter(
+    const prose = state.state.history.filter((entry) => entry.text.trim().length > 0);
+    const messageCandidates = prose.filter(
       (entry) => entry.role !== 'user' && !protectedIndex(entry.i),
     );
-    allProse.push(...proseEntries);
-    allMessageCandidates.push(...messageCandidates);
     if (outOfTime()) {
       partial = true;
-      break;
+      return { state, prose, messageCandidates };
     }
     const messageChunks = chunk(
       messageCandidates,
@@ -789,17 +814,36 @@ export async function compact(
           partial = true;
           return Promise.resolve(new Map<number, number>());
         }
-        return askMessageBatch(asker, state.state, batch, judgeTimings).catch((error: unknown) => {
-          if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
-          partial = true;
-          batchErrors += 1;
-          return new Map<number, number>();
-        });
+        return gate
+          .run(() => askMessageBatch(asker, state.state, batch, judgeTimings))
+          .catch((error: unknown) => {
+            if (!resolved.tolerateRequestFailures || !isRequestFailure(error)) throw error;
+            partial = true;
+            batchErrors += 1;
+            return new Map<number, number>();
+          });
       },
     );
     for (const map of answeredMessages) {
       for (const [i, noul] of map) messageAnswers.set(i, noul);
     }
+    return { state, prose, messageCandidates };
+  };
+  const sliceOutputs = await pooled(
+    ranges.map((range, sliceIndex) => ({ range, sliceIndex })),
+    resolved.askConcurrency,
+    ({ range, sliceIndex }) => processRange(sliceIndex, range),
+  );
+  // merge in range order (pooled returns indexed results): stable candidate
+  // order for budget eviction, first slice's state for stats/trainingLog
+  for (const output of sliceOutputs) {
+    if (output.state) {
+      fitted = fitted ?? output.state;
+      runStateTokens = Math.max(runStateTokens, output.state.tokens);
+      runStage = worseStage(runStage, output.state.stage);
+    }
+    allProse.push(...output.prose);
+    allMessageCandidates.push(...output.messageCandidates);
   }
   const proseEntries = allProse;
   const messageCandidates = allMessageCandidates;
