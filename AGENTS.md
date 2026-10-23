@@ -10,5 +10,11 @@ Repo instruction doc. Vendor-named variants (`CLAUDE.md`) mean the same.
 - Why the shim exists: ollama's `/v1/systemone` route only serves decision-arch models (clef/nimble/tev1 families — pull-only, no public training recipe; Typesafe explicitly offers no customer fine-tuning), so a fine-tuned qwen3 judge needs this protocol bridge. Keep it when moving between machines.
 - Quant ladder (game pc, 40 val examples / 826 questions vs teacher labels): Q4_K_S 98.5%, Q8 98.5%, Q4_K_M 98.2%, Q3_K_M 72.9%, Q2_K broken (endless generation). Judge Modelfiles therefore carry `num_predict 4096` — a degenerate reply can never run away.
 - Data pipeline: `npm run prepare-training` builds `~/.fast-compaction/training/fine-tune/{train,val}.jsonl` from stored compaction records; `npm run agreement` scores any candidate judge against val without re-asking the teacher.
-- Plugin release: `npm run ship-plugin` = push + refresh the local marketplace clone (`claude plugin marketplace update`) + `claude plugin update`; then resume the Claude Code session (plugins load once per process). Bump the version in `.claude-plugin/plugin.json` before shipping.
+- Plugin release: `npm run ship-plugin` = push + refresh the local marketplace clone (`claude plugin marketplace update`) + `claude plugin update`; then resume the Claude Code session (plugins load once per process). Bump the version in `.claude-plugin/plugin.json` before shipping. The marketplace refresh can fail silently (GitHub fetch errors) — verify the clone is at origin/main (`git fetch` + `git merge --ff-only` in the clone) and check the version line in the update output before telling the user to reload.
+
+## Shipping discipline
+
+- Defaults ship only when proven harmless in a live e2e (ledger/shim numbers), not just unit tests. Prefer effect-based guards over raw counters — the 0.7.7 raw call-count limiter blocked a normal 35-call commit.
+- Hosts own the thresholds: in Zed/ACP the HOST initiates compaction and the plugin only intercepts (`compactAtPercent` governs the plugin's own auto path only; `$.session.compact` is refused in SDK mode). The fixed per-request block (system prompt + tool schemas) must stay well under the compaction trigger — when it exceeds the trigger, context can never drop below it and the plugin re-fires every turn (the Oct-21 treadmill: 122.5k fixed block vs 120k trigger).
+- One reload per release; after shipping, measure the first real compaction in the ledger (ms/requests/ratio) instead of trusting the diff.
 
