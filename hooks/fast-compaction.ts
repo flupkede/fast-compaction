@@ -48,9 +48,17 @@ const HOOK_DEFAULTS = {
   targetFloorStepPercent: 5,
   model: DEFAULT_MODEL,
   judgeTimeoutMs: 8_000,
-  // mechanical self-restraint: a session flooding one tool drowns its own
-  // context (observed: 137 dam_browser calls, 746k chars, autocompact thrashing)
-  toolCallLimit: 30,
+  // mechanical self-restraint, effect-based: plain call volume is allowed —
+  // deep but healthy reading passes — and a tool is denied only when its loop
+  // is thrashing: repeated compactions within floodWindowMs while the same
+  // tool keeps refilling the context since the last one (observed: 137
+  // dam_browser calls, 746k chars, autocompact thrashing)
+  floodWindowMs: 180_000,
+  floodMinCompactions: 2,
+  floodMinCallsSinceCompact: 10,
+  // optional hard backstop on raw call count; 0 (the default) leaves the
+  // effect-based guard alone
+  toolCallLimit: 0,
   toolCallWindowMs: 900_000,
   // anti-treadmill: system prompt + tool schemas ride along with every
   // request (invisible to the plugin), so the percent trigger alone re-fires
@@ -91,8 +99,15 @@ export type HookConfig = Omit<CompactOptions, 'trainingLog'> & {
   targetFloorStepPercent: number;
   model: string;
   judgeTimeoutMs: number;
-  /** Max calls of one tool within toolCallWindowMs before the plugin denies
-   * further calls of that tool with guidance; 0 disables the limiter. */
+  /** Effect-based flood guard: deny a tool only when its loop is thrashing —
+   * >= floodMinCompactions compactions of this loop within floodWindowMs AND
+   * this tool called >= floodMinCallsSinceCompact times since the loop's last
+   * compaction. Healthy deep reading is never denied. */
+  floodWindowMs: number;
+  floodMinCompactions: number;
+  floodMinCallsSinceCompact: number;
+  /** Optional hard backstop on raw call count within toolCallWindowMs;
+   * 0 disables it. */
   toolCallLimit: number;
   toolCallWindowMs: number;
   /** Auto-compact only after the context regrew this % of the window above
@@ -181,6 +196,17 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       (asker === 'ollama' ? HOOK_DEFAULTS.ollamaTimeoutMs : HOOK_DEFAULTS.judgeTimeoutMs),
     toolCallLimit: optionNumber(options, 'toolCallLimit', HOOK_DEFAULTS.toolCallLimit),
     toolCallWindowMs: optionNumber(options, 'toolCallWindowMs', HOOK_DEFAULTS.toolCallWindowMs),
+    floodWindowMs: optionNumber(options, 'floodWindowMs', HOOK_DEFAULTS.floodWindowMs),
+    // clamped to >= 1: 0 would make the thrash condition vacuously true and
+    // resurrect the count-based deny the effect guard replaces
+    floodMinCompactions: Math.max(
+      1,
+      optionNumber(options, 'floodMinCompactions', HOOK_DEFAULTS.floodMinCompactions),
+    ),
+    floodMinCallsSinceCompact: Math.max(
+      1,
+      optionNumber(options, 'floodMinCallsSinceCompact', HOOK_DEFAULTS.floodMinCallsSinceCompact),
+    ),
     compactRegainPercent: optionNumber(
       options,
       'compactRegainPercent',
@@ -553,6 +579,10 @@ const KNOBS = [
   'judgeTimeoutMs',
   'model',
   'baseUrl',
+  'floodWindowMs',
+  'floodMinCompactions',
+  'floodMinCallsSinceCompact',
+  'toolCallLimit',
 ] as const;
 
 /** The tunable knobs as a comparable string, to spot mid-session settings edits. */
@@ -641,30 +671,68 @@ export function shouldAutoCompact(input: {
   return input.tokens - input.minTokensSinceCompact >= regain;
 }
 
+/** Knobs the flood guard reads, as one testable bundle. */
+export type FloodConfig = Pick<
+  HookConfig,
+  | 'floodWindowMs'
+  | 'floodMinCompactions'
+  | 'floodMinCallsSinceCompact'
+  | 'toolCallLimit'
+  | 'toolCallWindowMs'
+>;
+
 /**
- * Mechanical self-restraint: tracks per-tool call timestamps and denies a
- * tool that fired more than `limit` times inside `windowMs` — a session
- * flooding one tool drowns its own context (observed: 137 dam_browser
- * calls, 746k chars, autocompact thrashing). Returns the deny reason, or
- * null when the call may proceed.
+ * Mechanical self-restraint, effect-based: plain call volume is allowed —
+ * deep but healthy reading passes — and a tool is denied only when the loop
+ * it runs in is thrashing: `compactions` (this loop's stamps, oldest first)
+ * shows >= floodMinCompactions within floodWindowMs AND the tool has been
+ * called >= floodMinCallsSinceCompact times since the loop's last compaction,
+ * i.e. the same tool keeps refilling the context that keeps being compacted
+ * (observed: 137 dam_browser calls, 746k chars, autocompact thrashing).
+ * `toolCallLimit` stays as an optional raw-count backstop. Prunes `calls` in
+ * place and records this call. Returns the deny reason, or null when the
+ * call may proceed.
  */
-export function checkToolCall(
-  state: Map<string, number[]>,
+export function checkToolFlood(
   tool: string,
+  calls: number[],
+  compactions: number[],
   now: number,
-  limit: number,
-  windowMs: number,
+  config: FloodConfig,
 ): string | null {
-  if (limit <= 0) return null;
-  const stamps = (state.get(tool) ?? []).filter((t) => now - t < windowMs);
-  stamps.push(now);
-  state.set(tool, stamps);
-  if (stamps.length <= limit) return null;
-  return (
-    `fast-compaction: ${tool} called ${stamps.length}x within ${Math.round(windowMs / 60_000)} min — ` +
-    'this floods the context (autocompact thrashing). Narrow the query, paginate, or delegate bulk work to a subagent.' +
-    ` (plugin option toolCallLimit=${limit})`
-  );
+  const horizon = Math.max(config.floodWindowMs, config.toolCallWindowMs);
+  const kept = calls.filter((t) => now - t < horizon);
+  kept.push(now);
+  calls.length = 0;
+  calls.push(...kept);
+  const recent = compactions.filter((t) => now - t < config.floodWindowMs);
+  const lastCompactAt = compactions.length > 0 ? compactions[compactions.length - 1] : undefined;
+  const sinceCompact =
+    lastCompactAt === undefined ? kept.length : kept.filter((t) => t > lastCompactAt).length;
+  if (
+    recent.length >= config.floodMinCompactions &&
+    sinceCompact >= config.floodMinCallsSinceCompact
+  ) {
+    return (
+      `fast-compaction: ${tool} is refilling a thrashing loop — ${recent.length} compactions within ` +
+      `${Math.round(config.floodWindowMs / 60_000)} min, ${sinceCompact} calls since the last one. ` +
+      'Narrow the query, batch reads, or delegate bulk work to a subagent.'
+    );
+  }
+  if (config.toolCallLimit > 0) {
+    // the shared array keeps the wider horizon for sinceCompact; the backstop
+    // counts over its own documented window
+    const inWindow = kept.filter((t) => now - t < config.toolCallWindowMs).length;
+    if (inWindow > config.toolCallLimit) {
+      return (
+        `fast-compaction: ${tool} called ${inWindow}x within ` +
+        `${Math.round(config.toolCallWindowMs / 60_000)} min — ` +
+        'this floods the context (autocompact thrashing). Narrow the query, paginate, or delegate bulk work to a subagent.' +
+        ` (plugin option toolCallLimit=${config.toolCallLimit})`
+      );
+    }
+  }
+  return null;
 }
 
 export const register: Register = (on: On, options: PluginOptions) => {
@@ -677,22 +745,25 @@ export const register: Register = (on: On, options: PluginOptions) => {
   let pendingCompact: 'force' | 'auto' | null = null;
   // snapshot of the tunable knobs, to notice mid-session settings edits
   let lastKnobs: string | undefined;
-  // per-tool call timestamps within the current window (mechanical
-  // self-restraint: a session flooding one tool drowns its own context)
-  const toolCalls = new Map<string, number[]>();
+  // per-loop flood-guard state: tool call timestamps and compaction stamps,
+  // keyed by agentId ('main' for the top loop) so a subagent's deep reading
+  // never denies the main loop's tools and vice versa
+  const toolCalls = new Map<string, Map<string, number[]>>();
+  const compactions = new Map<string, number[]>();
+  const loopKey = (agentId: unknown): string =>
+    typeof agentId === 'string' && agentId.length > 0 ? agentId : 'main';
 
   on('tool.call', async ($, event, next) => {
     try {
       const tool = typeof event.tool === 'string' ? event.tool : undefined;
       if (tool === undefined) return next(event);
       const live = resolveHookConfig(await hotOptions($, options as PluginOptions));
-      const reason = checkToolCall(
-        toolCalls,
-        tool,
-        Date.now(),
-        live.toolCallLimit,
-        live.toolCallWindowMs,
-      );
+      const key = loopKey(event.agentId);
+      const loopCalls = toolCalls.get(key) ?? new Map<string, number[]>();
+      toolCalls.set(key, loopCalls);
+      const stamps = loopCalls.get(tool) ?? [];
+      const reason = checkToolFlood(tool, stamps, compactions.get(key) ?? [], Date.now(), live);
+      loopCalls.set(tool, stamps);
       if (reason !== null) {
         $.ui.log(reason);
         return { deny: reason };
@@ -751,6 +822,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
     // not at register time
     const configured = resolveHookConfig(await hotOptions($, options));
     const agent = event.agentId !== undefined;
+    // every path through this handler ends in a compacted transcript (judge,
+    // fallback-low, fallback-error) — stamp it for the flood guard, pruned to
+    // the pressure window
+    const cKey = loopKey(event.agentId);
+    const cNow = Date.now();
+    const fresh = (compactions.get(cKey) ?? []).filter((t) => cNow - t < configured.floodWindowMs);
+    fresh.push(cNow);
+    compactions.set(cKey, fresh);
     let tokensBefore: number | undefined;
     let windowTokens: number | undefined;
     if (!agent) {

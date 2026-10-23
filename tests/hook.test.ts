@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   COMPRESS_COMMAND,
-  checkToolCall,
+  checkToolFlood,
   compactSession,
   decisionLog,
   decisionLogLines,
@@ -69,7 +69,10 @@ describe('hook config', () => {
       targetFloorStepPercent: 5,
       model: 'jev-latest',
       judgeTimeoutMs: 8000,
-      toolCallLimit: 30,
+      floodWindowMs: 180_000,
+      floodMinCompactions: 2,
+      floodMinCallsSinceCompact: 10,
+      toolCallLimit: 0,
       toolCallWindowMs: 900_000,
       compactRegainPercent: 20,
     });
@@ -87,7 +90,10 @@ describe('hook config', () => {
       targetFloorMinPercent: 25,
       targetFloorStepPercent: 5,
       judgeTimeoutMs: 8000,
-      toolCallLimit: 30,
+      floodWindowMs: 180_000,
+      floodMinCompactions: 2,
+      floodMinCallsSinceCompact: 10,
+      toolCallLimit: 0,
       toolCallWindowMs: 900_000,
       compactRegainPercent: 20,
     });
@@ -104,7 +110,10 @@ describe('hook config', () => {
       baseUrl: 'http://localhost:11434/v1/systemone',
       model: 'clef-flash',
       judgeTimeoutMs: 600000,
-      toolCallLimit: 30,
+      floodWindowMs: 180_000,
+      floodMinCompactions: 2,
+      floodMinCallsSinceCompact: 10,
+      toolCallLimit: 0,
       toolCallWindowMs: 900_000,
       compactRegainPercent: 20,
 
@@ -150,21 +159,74 @@ describe('hook config', () => {
     expect(resolveHookConfig({ judgeTimeoutMs: 999, jevTimeoutMs: 123_456 }).judgeTimeoutMs).toBe(999);
   });
 
-  it('limits repeated calls of one tool and forgets them after the window', () => {
-    const state = new Map<string, number[]>();
-    // limit 3: three calls pass, the fourth denies with guidance
-    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 1_000, 3, 900_000)).toBeNull();
-    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 2_000, 3, 900_000)).toBeNull();
-    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 3_000, 3, 900_000)).toBeNull();
-    const deny = checkToolCall(state, 'mcp__aprimo__dam_browser', 4_000, 3, 900_000);
-    expect(deny).toMatch(/dam_browser called 4x/);
-    expect(deny).toMatch(/toolCallLimit=3/);
-    // a different tool is unaffected
-    expect(checkToolCall(state, 'Read', 4_000, 3, 900_000)).toBeNull();
-    // outside the window the old calls are forgotten
-    expect(checkToolCall(state, 'mcp__aprimo__dam_browser', 4_000 + 900_001, 3, 900_000)).toBeNull();
-    // limit 0 disables the limiter entirely
-    expect(checkToolCall(new Map(), 'Bash', 1_000, 0, 900_000)).toBeNull();
+  const floodConfig = {
+    floodWindowMs: 180_000,
+    floodMinCompactions: 2,
+    floodMinCallsSinceCompact: 10,
+    toolCallLimit: 0,
+    toolCallWindowMs: 900_000,
+  };
+
+  it('allows any call volume while the loop is healthy', () => {
+    const calls: number[] = [];
+    for (let i = 0; i < 50; i++) {
+      expect(checkToolFlood('mcp__codesearch__get_chunk', calls, [], 1_000 + i, floodConfig)).toBeNull();
+    }
+  });
+
+  it('denies a tool only when its loop thrashes and it drives the refill', () => {
+    const calls: number[] = [];
+    // 12 calls, then two compactions within the window
+    for (let i = 0; i < 12; i++) {
+      expect(checkToolFlood('get_chunk', calls, [], i, floodConfig)).toBeNull();
+    }
+    // one compaction: no thrash yet
+    expect(checkToolFlood('get_chunk', calls, [100], 200, floodConfig)).toBeNull();
+    // second compaction: thrash — but the 12 calls predate it, so the tool is
+    // not (yet) the refill driver
+    expect(checkToolFlood('get_chunk', calls, [100, 250], 300, floodConfig)).toBeNull();
+    // ten calls after the last compaction: the tenth denies
+    for (let t = 301; t < 310; t++) checkToolFlood('get_chunk', calls, [100, 250], t, floodConfig);
+    expect(checkToolFlood('get_chunk', calls, [100, 250], 310, floodConfig)).toMatch(/thrashing/);
+    // a tool with fewer calls since the last compaction is not the driver
+    const few: number[] = [];
+    for (let t = 260; t < 268; t++) checkToolFlood('Read', few, [100, 250], t, floodConfig);
+    expect(checkToolFlood('Read', few, [100, 250], 268, floodConfig)).toBeNull();
+    expect(checkToolFlood('Read', few, [100, 250], 269, floodConfig)).toMatch(/thrashing/);
+    // compactions older than the window are no thrash at all
+    const old: number[] = [];
+    for (let i = 0; i < 30; i++) checkToolFlood('Bash', old, [], i, floodConfig);
+    expect(checkToolFlood('Bash', old, [0, 1], 400_000, floodConfig)).toBeNull();
+  });
+
+  it('keeps toolCallLimit as an optional raw-count backstop', () => {
+    const config = { ...floodConfig, toolCallLimit: 3 };
+    const calls: number[] = [];
+    expect(checkToolFlood('Bash', calls, [], 1_000, config)).toBeNull();
+    expect(checkToolFlood('Bash', calls, [], 2_000, config)).toBeNull();
+    expect(checkToolFlood('Bash', calls, [], 3_000, config)).toBeNull();
+    expect(checkToolFlood('Bash', calls, [], 4_000, config)).toMatch(/toolCallLimit=3/);
+    // 0 disables the backstop entirely
+    const off = { ...floodConfig, toolCallLimit: 0 };
+    const unlimited: number[] = [];
+    for (let i = 0; i < 40; i++) {
+      expect(checkToolFlood('Bash', unlimited, [], i, off)).toBeNull();
+    }
+  });
+
+  it('clamps degenerate flood knobs so 0 cannot resurrect the raw-count deny', () => {
+    expect(resolveHookConfig({ floodMinCompactions: 0 }).floodMinCompactions).toBe(1);
+    expect(resolveHookConfig({ floodMinCallsSinceCompact: 0 }).floodMinCallsSinceCompact).toBe(1);
+    expect(resolveHookConfig({ floodMinCompactions: -5 }).floodMinCompactions).toBe(1);
+  });
+
+  it('counts the backstop over its own tool-call window, not the flood window', () => {
+    const config = { ...floodConfig, floodWindowMs: 1_200_000, toolCallLimit: 3 };
+    const calls: number[] = [];
+    for (const t of [0, 1_000, 2_000]) checkToolFlood('Bash', calls, [0, 1_000, 2_000], t, config);
+    // 15 min after the oldest stamp only 3 calls fall inside toolCallWindowMs,
+    // so the 4th call must pass (the flood window would have counted 4)
+    expect(checkToolFlood('Bash', calls, [0, 1_000, 2_000], 900_001, config)).toBeNull();
   });
 
   it('holds the auto trigger while the context has not regrown past its post-compaction low', () => {
@@ -285,7 +347,7 @@ describe('slash commands', () => {
   };
 
   /** Drives register() without an engine: captures every on() registration. */
-  function registeredHooks(): HookEntry[] {
+  function registeredHooks(options: Record<string, unknown> = {}): HookEntry[] {
     const entries: HookEntry[] = [];
     const on = (pattern: unknown, ...rest: unknown[]) => {
       const matcher =
@@ -299,7 +361,7 @@ describe('slash commands', () => {
       });
       return { catch: () => {} };
     };
-    register(on as unknown as Parameters<typeof register>[0], {});
+    register(on as unknown as Parameters<typeof register>[0], options);
     return entries;
   }
 
@@ -358,6 +420,104 @@ describe('slash commands', () => {
     expect(calls).toBe(0);
     await turn.hook($, { agentId: undefined }, (event: unknown) => event);
     expect(calls).toBe(1);
+  });
+
+  it('scopes the flood guard per loop: a subagent volume never denies the main loop', async () => {
+    const toolCall = registeredHooks({ toolCallLimit: 2 }).find((e) => e.pattern === 'tool.call')!;
+    const $ = { settings: { read: async () => ({}) }, ui: { log: () => {} } };
+    const next = (event: unknown) => event;
+    const agentEvt = { tool: 'Bash', agentId: 'agent-1' };
+    expect(await toolCall.hook($, agentEvt, next)).toBe(agentEvt);
+    expect(await toolCall.hook($, agentEvt, next)).toBe(agentEvt);
+    expect(await toolCall.hook($, agentEvt, next)).toEqual({
+      deny: expect.stringMatching(/toolCallLimit=2/),
+    });
+    // the main loop keeps its own counter
+    const mainEvt = { tool: 'Bash' };
+    expect(await toolCall.hook($, mainEvt, next)).toBe(mainEvt);
+  });
+
+  it('denies a tool after repeated compactions attribute the refill to it', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const hooks = registeredHooks();
+      const toolCall = hooks.find((e) => e.pattern === 'tool.call')!;
+      const sessionCompact = hooks.find((e) => e.pattern === 'session.compact')!;
+      const $ = {
+        settings: { read: async () => ({}) },
+        env: { get: async () => undefined },
+        http: {
+          fetch: async () => {
+            throw new Error('no engine in test');
+          },
+        },
+        session: { id: async () => 'flood-test', usage: async () => ({ context: {} }) },
+        clock: { now: async () => 0, sleep: async () => {} },
+        store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+        ui: { log: () => {}, toast: () => {} },
+      };
+      const next = (event: unknown) => event;
+      const evt = { tool: 'mcp__codesearch__get_chunk' };
+      // 12 healthy calls: allowed
+      for (let i = 0; i < 12; i++) expect(await toolCall.hook($, evt, next)).toBe(evt);
+      // two compactions of this loop (the judge falls back, but the context
+      // dropped both times — both stamp the guard)
+      vi.advanceTimersByTime(1_000);
+      await sessionCompact.hook($, { messages: [], agentId: undefined }, next);
+      vi.advanceTimersByTime(1_000);
+      await sessionCompact.hook($, { messages: [], agentId: undefined }, next);
+      // nine calls since the last compaction pass; the tenth denies
+      for (let i = 0; i < 9; i++) {
+        vi.advanceTimersByTime(1_000);
+        expect(await toolCall.hook($, evt, next)).toBe(evt);
+      }
+      vi.advanceTimersByTime(1_000);
+      expect(await toolCall.hook($, evt, next)).toEqual({
+        deny: expect.stringMatching(/thrashing/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never lets a subagent compaction stamp the main loop', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const hooks = registeredHooks();
+      const toolCall = hooks.find((e) => e.pattern === 'tool.call')!;
+      const sessionCompact = hooks.find((e) => e.pattern === 'session.compact')!;
+      const $ = {
+        settings: { read: async () => ({}) },
+        env: { get: async () => undefined },
+        http: {
+          fetch: async () => {
+            throw new Error('no engine in test');
+          },
+        },
+        session: { id: async () => 'flood-test', usage: async () => ({ context: {} }) },
+        clock: { now: async () => 0, sleep: async () => {} },
+        store: { keys: async () => [], get: async () => undefined, set: async () => {}, delete: async () => {} },
+        ui: { log: () => {}, toast: () => {} },
+      };
+      const next = (event: unknown) => event;
+      const mainEvt = { tool: 'mcp__codesearch__get_chunk' };
+      for (let i = 0; i < 12; i++) expect(await toolCall.hook($, mainEvt, next)).toBe(mainEvt);
+      // two compactions of a subagent loop — the exact volume that denies
+      // when the compactions hit this loop
+      vi.advanceTimersByTime(1_000);
+      await sessionCompact.hook($, { messages: [], agentId: 'agent-1' }, next);
+      vi.advanceTimersByTime(1_000);
+      await sessionCompact.hook($, { messages: [], agentId: 'agent-1' }, next);
+      // the main loop keeps refilling well past the deny threshold
+      for (let i = 0; i < 31; i++) {
+        vi.advanceTimersByTime(1_000);
+        expect(await toolCall.hook($, mainEvt, next)).toBe(mainEvt);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('turn.complete without the flag respects the percent threshold', async () => {
