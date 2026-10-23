@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Verbatim judge-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
@@ -106,16 +106,34 @@
       "description": "Stop asking the judge after this long: unanswered candidates stay and the next compaction judges the remainder. Leave empty to derive it: judge timeout minus 40s, capped at 110s (engine kills hooks at ~2min).",
       "default": ""
     },
+    "floodWindowMs": {
+      "type": "number",
+      "title": "Flood guard window (ms)",
+      "description": "Sliding window in which repeated compactions of one loop count as thrashing.",
+      "default": 180000
+    },
+    "floodMinCompactions": {
+      "type": "number",
+      "title": "Compactions that signal thrashing",
+      "description": "Compactions of one loop within the flood guard window before its tools can be denied as refill drivers. Healthy deep reading is never denied.",
+      "default": 2
+    },
+    "floodMinCallsSinceCompact": {
+      "type": "number",
+      "title": "Refill driver calls",
+      "description": "Calls of one tool since the loop's last compaction before it is named the refill driver and denied while the loop is thrashing.",
+      "default": 10
+    },
     "toolCallLimit": {
       "type": "number",
-      "title": "Repeated tool call limit",
-      "description": "Max calls of one tool within the window before further calls are denied with guidance (a tool flooding the context causes autocompact thrashing). 0 disables.",
-      "default": 30
+      "title": "Repeated tool call limit (backstop)",
+      "description": "Optional hard backstop: max calls of one tool within the window before further calls are denied with guidance. 0 (default) disables it — the effect-based flood guard is the primary restraint.",
+      "default": 0
     },
     "toolCallWindowMs": {
       "type": "number",
       "title": "Tool call limit window (ms)",
-      "description": "Sliding window for the repeated tool call limit; old calls are forgotten after this.",
+      "description": "Sliding window for the toolCallLimit backstop; old calls are forgotten after this.",
       "default": 900000
     },
     "compactRegainPercent": {
